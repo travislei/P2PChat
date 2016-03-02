@@ -37,6 +37,9 @@ roomname = ""
 msgid = 0
 
 thread_list = []
+
+#  P2P sockets link
+forwardlink_socket = socket.socket()
 backlink_list = []
 
 mlock = threading.Lock()
@@ -136,10 +139,11 @@ class MemberList(object):
     def __init__(self):
         self.data = []
         self.hashval = None
+        self.pos = -1
 
     def print_info(self):
         print("[debug] Member list: ", self.data)
-        print("[debug] Sorted pos.: ", self.get_sortpos() + 1,
+        print("[debug] Sorted pos.: ", self.pos + 1,
               "/", len(self.data), '\n')
 
     def split(self, list):
@@ -148,11 +152,6 @@ class MemberList(object):
         """
         _newlist = re.findall(":".join(["[^:]+"] * 3), list)
         return _newlist
-
-    def get_sortpos(self):
-        """ Sort and return the position of my hash value (_MYHASH_) """
-        sorted_data = sorted(self.data, key=lambda x: x[1])
-        return [x[1] for x in sorted_data].index(_MYHASH_)
 
     def update(self, list):
         new_hash = sdbm_hash(list)
@@ -172,6 +171,10 @@ class MemberList(object):
                 _ = i.replace(':', '')
                 self.data.append((i, sdbm_hash(_)))
 
+            #  Sort and get my position
+            self.data = sorted(self.data, key=lambda x: x[1])
+            self.pos = [x[1] for x in self.data].index(_MYHASH_)
+
             self.print_info()
 
 
@@ -179,22 +182,25 @@ class MemberList(object):
 member_list = MemberList()
 
 
-def keepalive():
+def send_keepalive():
     """ Thread to send keepalive message and update memberlist """
     global mlock, _running_, _KEEPALIVE_, memberlist
 
-    thd_name = threading.current_thread().getName()
+    print("[debug] Start Connect thread...")
+
+    #  Get thread name
+    thd_name = "Thd." + threading.current_thread().getName()
 
     while True:
-        for i in range(5):
-            time.sleep(1)
+        for i in range(20):
+            time.sleep(0.5)
 
             if _running_ is False:
                 print("[debug]", thd_name, "is dying... x(")
                 return
 
         mlock.acquire()
-        print("[debug] Thd.{}: Send a keepalive message...".format(
+        print("[debug] {}: Send a keepalive message...".format(
             thd_name), end="")
         server_socket.send(_KEEPALIVE_)
         received = server_socket.recv(1024)
@@ -209,38 +215,86 @@ def keepalive():
             insert_cmd(error_msg)
 
 
-def listenport():
-    """ Thread to listen connection(s) using select """
-    global listen_socket, backlink_list
+def build_forwardlink():
+    """ Function to establish a forward link """
+    global member_list
 
-    thd_name = threading.current_thread().getName()
+    if len(member_list.data) == 1:
+        insert_cmd("[Conc] Yes, you are alone! :(")
+        return
 
-    try:
-        listen_socket.bind(('', listen_port))
-    except socket.error as e:
-        print("Socket bind error: ", e)
-        sys.exit(1)
+    pos = (member_list.pos + 1) % len(member_list.data)
 
-    listen_socket.listen(5)
+    while member_list.data[pos][1] != _MYHASH_:
+        print("[debug] Find a peer: ", member_list.data[pos])
+
+        peer_info = member_list.data[pos][0].split(':')
+        insert_cmd("[Conc] Try to connect \"{}\" with address {}:{}".format(
+            peer_info[0], peer_info[1], peer_info[2]
+        ))
+
+        try:
+            forwardlink_socket.connect((peer_info[1], int(peer_info[2])))
+            _connected_ = True
+        except socket.error as e:
+            print("[debug] Cannot establish forward link: ", e)
+            pos = (pos + 1) %  len(member_list.data)
+            continue
+        #  print("[debug] New pos:", pos)
+
+
+
+def connect_to_peer():
+    """ Thread to connect to peer """
+    global mlock, _running_, _connected_, member_list
+
+    print("[debug] Start Connect thread...")
+
+    #  Get thread name
+    thd_name = "Thd." + threading.current_thread().getName()
+
+    insert_cmd("[Conc] Try to connect to a peer...")
+    build_forwardlink()
 
     while True:
-        for i in range(5):
-            time.sleep(1)
-            inready, outready, excready = select.select(
-                backlink_list, [], [], 1.0)
+        for i in range(20):
+            time.sleep(0.5)
 
             if _running_ is False:
                 print("[debug]", thd_name, "is dying... x(")
                 return
 
+        if _connected_ is False:
+            insert_cmd("[Conc] Not in connected state, try again... (no peer?)")
+            build_forwardlink()
+
+
+def listen_to_port():
+    """ Thread to listen connection(s) using select """
+    global mlock, _running_, listen_socket, backlink_list, msgid
+
+    print("[debug] Start Listen thread...")
+
+    #  Get thread name
+    thd_name = "Thd." + threading.current_thread().getName()
+
+    insert_cmd("[Port] Now listening port " + str(listen_port))
+
+    while True:
+        inready, outready, excready = select.select(backlink_list, [], [], 5.0)
+
+        if _running_ is False:
+            print("[debug]", thd_name, "is dying... x(")
+            return
+
         if not inready:
-            print("[debug] Thd.{}: Idling".format(thd_name))
+            print("[debug] {}: Idling".format(thd_name))
         else:
             for s in inready:
                 if s is listen_socket:
                     peer, address = listen_socket.accept()
-                    print("[debug] Thd.{}: New connection from".format(
-                        thd_name), peer.getpeername())
+                    print("[debug] {}: New connection from".format(thd_name),
+                          peer.getpeername())
                     backlink_list.append(peer)
                 else:
                     #  data = s.recv(1024)
@@ -356,20 +410,26 @@ def do_Join():
 
         insert_cmd("[Join] You (" + username + ")" +
                    " have successfully joined the chatroom \"" +
-                   roomname + "\"!")
+                   roomname + "\"!\n" + "       User(s) online: " +
+                   str(len(member_list.data)))
 
         #  Start a thread to send keepalive
-        print("[debug] Start Keepalive thread...")
         keepalive_thread = threading.Thread(name="Keepalive",
-                                            target=keepalive)
+                                            target=send_keepalive)
         keepalive_thread.start()
         thread_list.append(keepalive_thread)
 
-        insert_cmd("[Join] Searching for peer...")
+        #  Start a thread to listen a port
         listen_thread = threading.Thread(name="Listen",
-                                            target=listenport)
+                                            target=listen_to_port)
         listen_thread.start()
-        thread_list.append(keepalive_thread)
+        thread_list.append(listen_thread)
+
+        #  Start a thread to connect a peer
+        connect_thread = threading.Thread(name="Connect",
+                                            target=connect_to_peer)
+        connect_thread.start()
+        thread_list.append(connect_thread)
 
         #  Set buttons state
         Butt01['state'] = 'disabled'
@@ -409,6 +469,7 @@ def do_Quit():
     listen_socket.close()
     sys.exit(0)
 
+
 # Add buttons functions
 Butt01.config(command=do_User)
 Butt02.config(command=do_List)
@@ -433,10 +494,19 @@ def main(argv):
         print("Cannot connect to the server: ", e)
         sys.exit(1)
 
+    #  Try to bind and listen to the port
+    try:
+        listen_socket.bind(('', listen_port))
+    except socket.error as e:
+        print("Socket bind error: ", e)
+        sys.exit(1)
+
+    listen_socket.listen(5)
+
     #  Print welcome message
     welcome_msg = ("{:s}***** Welcome to P2P Chatroom *****\n"
                    "{:s} (IP: {:s}) has connected to {:s}:{:d} and"
-                   " listened a port {:d}.\n>>> Enter your name above and click"
+                   " opened a port {:d}.\n>>> Enter your name above and click"
                    " User to get started!\n{:s}").format(
                        " " * 23, hostname, userip,
                        server_addr, server_port, listen_port,
