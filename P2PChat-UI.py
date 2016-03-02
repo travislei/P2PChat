@@ -31,6 +31,8 @@ listen_port = int(sys.argv[3])
 hostname = socket.gethostname()
 userip = socket.gethostbyname(hostname)
 username = None
+roomname = ""
+msgid = 0
 
 thread_list = []
 socket_list = []
@@ -38,7 +40,78 @@ socket_list = []
 mlock = threading.Lock()
 
 _running_ = True
-_keepalive_ = None
+_connected_ = False
+_KEEPALIVE_ = None
+_MYHASH_ = 0L
+
+
+#
+#  Set up of Basic UI
+#
+win = Tk()
+win.title("MyP2PChat")
+
+#  Top Frame for Message display
+topframe = Frame(win, relief=RAISED, borderwidth=1)
+topframe.pack(fill=BOTH, expand=True)
+
+MsgWin = ScrolledText(topframe, height='15', padx=5, pady=5, fg="red",
+              exportselection=0, insertofftime=0, state=DISABLED)
+MsgWin.pack(side=LEFT, fill=BOTH, expand=True)
+
+#  Top Middle Frame for buttons
+topmidframe = Frame(win, relief=RAISED, borderwidth=1)
+topmidframe.pack(fill=X, expand=True)
+
+Butt01 = Button(topmidframe, width='8', relief=RAISED, text="User")
+Butt01.pack(side=LEFT, padx=8, pady=8)
+
+Butt02 = Button(topmidframe, width='8', relief=RAISED,
+                text="List", state=DISABLED)
+Butt02.pack(side=LEFT, padx=8, pady=8)
+
+Butt03 = Button(topmidframe, width='8', relief=RAISED,
+                text="Join", state=DISABLED)
+Butt03.pack(side=LEFT, padx=8, pady=8)
+
+Butt04 = Button(topmidframe, width='8', relief=RAISED,
+                text="Send", state=DISABLED)
+Butt04.pack(side=LEFT, padx=8, pady=8)
+
+Butt05 = Button(topmidframe, width='8', relief=RAISED,
+                text="Quit", bg="red")
+Butt05.pack(side=LEFT, padx=8, pady=8)
+
+#  Lower Middle Frame for User input
+lowmidframe = Frame(win, relief=RAISED, borderwidth=1)
+lowmidframe.pack(fill=X, expand=True)
+
+userentry = Entry(lowmidframe, fg="blue")
+userentry.pack(fill=X, padx=4, pady=4, expand=True)
+
+#  Bottom Frame for displaying action info
+bottframe = Frame(win, relief=RAISED, borderwidth=1)
+bottframe.pack(fill=BOTH, expand=True)
+
+CmdWin = ScrolledText(bottframe, height='15', padx=5, pady=5, bg="#E9E9E9",
+                      exportselection=0, insertofftime=0, state=DISABLED)
+CmdWin.pack(side=LEFT, fill=BOTH, expand=True)
+
+
+def insert_cmd(text):
+    """ Display on command window"""
+    CmdWin["state"] = "normal"
+    CmdWin.insert("end", text + '\n')
+    CmdWin.see("end")
+    CmdWin["state"] = "disabled"
+
+
+def insert_msg(username, text):
+    """ Display on message window"""
+    MsgWin["state"] = "normal"
+    MsgWin.insert("end", '[' + username + "] "+ text + '\n')
+    MsgWin.see("end")
+    MsgWin["state"] = "disabled"
 
 
 def sdbm_hash(instr):
@@ -56,39 +129,49 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
+    global _MYHASH_
+
     def __init__(self):
-        self.values = []
+        self.data = []
         self.hashval = None
 
-    def print_value(self):
-        print("[debug] Member list: ", self.values, '\n')
+    def print_info(self):
+        print("[debug] Member list: ", self.data)
+        print("[debug] Sorted pos.: ", self.get_sortpos() + 1,
+              "/", len(self.data), '\n')
 
     def split(self, list):
-        """ Split into User:IP:Port list
+        """ Split into [User:IP:Port list]
         Source: http://stackoverflow.com/questions/1059559
         """
         _newlist = re.findall(":".join(["[^:]+"] * 3), list)
         return _newlist
 
+    def get_sortpos(self):
+        """ Sort and return the position of my hash value (_MYHASH_) """
+        sorted_data = sorted(self.data, key=lambda x: x[1])
+        return [x[1] for x in sorted_data].index(_MYHASH_)
+
     def update(self, list):
         new_hash = sdbm_hash(list)
 
         if new_hash == self.hashval:
-            print("[debug] Member list is up to date")
-            self.print_value()
+            print("member list is up to date")
+            #  self.print_info()
         else:
-            print("[debug] Update member list...")
+            print("update member list!")
             self.hashval = new_hash
 
-            #  Split and remove ":"
+            #  Split and clear
             _splited = self.split(list)
-            self.values[:] = []
+            self.data[:] = []
+
+            # Remove ":" and hash it
             for i in _splited:
                 _ = i.replace(':', '')
-                self.values.append((_, sdbm_hash(_)))
+                self.data.append((i, sdbm_hash(_)))
 
-            self.values.sort(key=lambda x: x[1])
-            self.print_value()
+            self.print_info()
 
 
 #  Create a memberlist
@@ -97,7 +180,7 @@ member_list = MemberList()
 
 def keepalive():
     """ Thread to send keepalive message and update memberlist """
-    global _running_, _keepalive_, memberlist
+    global mlock, _running_, _KEEPALIVE_, memberlist
 
     thd_name = threading.current_thread().getName()
 
@@ -110,8 +193,8 @@ def keepalive():
                 return
 
         mlock.acquire()
-        print("[debug] Send a keepalive message")
-        server_socket.send(_keepalive_)
+        print("[debug] Send a keepalive message...", end="")
+        server_socket.send(_KEEPALIVE_)
         received = server_socket.recv(1024)
         mlock.release()
 
@@ -121,15 +204,7 @@ def keepalive():
         elif received[:2] == "F:":
             error_msg = ("[Join] Error: {:s}").format(
                 received[2:].rstrip(":\r\n"))
-            display_text(CmdWin, error_msg)
-
-
-def display_text(window, text):
-    """ Display string on specified window """
-    window["state"] = "normal"
-    window.insert("end", text + '\n')
-    window.see("end")
-    window["state"] = "disabled"
+            insert_cmd(error_msg)
 
 
 #
@@ -138,18 +213,19 @@ def display_text(window, text):
 def do_User():
     global username
 
-    username = userentry.get()
+    _un = userentry.get()
 
-    if username is "":
+    if _un is "":
         showwarning("Please enter your name", "Your name must not be null!")
         return
 
-    if ":" in username:
+    if ":" in _un:
         showwarning("Special character!", "Cannot contain \":\"")
         return
 
+    username = _un
     outstr = "[User] Username: " + username
-    display_text(CmdWin, outstr)
+    insert_cmd(outstr)
 
     Butt02['state'] = 'normal'
     Butt03['state'] = 'normal'
@@ -157,57 +233,74 @@ def do_User():
 
 
 def do_List():
+    global mlock
+
     mlock.acquire()
     server_socket.send("L::\r\n")
     received = server_socket.recv(1024)
     mlock.release()
 
     if received == "G::\r\n":
-        display_text(CmdWin, "[List] No active chatroom!")
+        insert_cmd("[List] No active chatroom!")
     elif received[:2] == "G:":
-        display_text(CmdWin, "[List] Here are the active chatroom(s):")
+        insert_cmd("[List] Here is/are the active chatroom(s):")
 
         cmd_msg = ""
         chatroom_list = received[2:].rstrip(":\r\n").split(':')
         for c in chatroom_list:
-            cmd_msg += '\t' + c + '\n'
+            cmd_msg += '\t\t' + c + '\n'
 
-        display_text(CmdWin, cmd_msg + "No room")
+        #  Remove the last newline
+        insert_cmd(cmd_msg.rstrip('\n'))
+
+        #  Display which chatroom your are in
+        if roomname == "":
+            insert_cmd("\b\b       You are not in any chatroom.")
+        else:
+            insert_cmd("\b\b       You currently in \""
+                         + roomname + "\".")
     elif received[:2] == "F:":
         error_msg = ("[List] Error: {:s}").format(
             received[2:].rstrip(":\r\n"))
-        display_text(CmdWin, error_msg)
+        insert_cmd(error_msg)
 
 
 def do_Join():
-    global _keepalive_
+    global mlock, roomname, _KEEPALIVE_, _MYHASH_
 
-    roomname = userentry.get()
+    _rm = userentry.get()
 
-    if roomname is "":
+    if _rm is "":
         showwarning("Please enter the room name",
                     "The room name must not be null!")
         return
 
-    if ":" in roomname:
+    if ":" in _rm:
         showwarning("Special character!", "Cannot contain \":\"")
         return
 
+    roomname = _rm
+
+    #  Username is now confirmed, generate hash value
+    _MYHASH_ = sdbm_hash(username + userip + str(listen_port))
+
     #  Send message to the server
-    mlock.acquire()
-    _keepalive_ = ("J:{:s}:{:s}:{:s}:{:d}::\r\n").format(roomname, username,
+    _KEEPALIVE_ = ("J:{:s}:{:s}:{:s}:{:d}::\r\n").format(roomname, username,
                                                          userip, listen_port)
-    server_socket.send(_keepalive_)
+    mlock.acquire()
+    server_socket.send(_KEEPALIVE_)
     received = server_socket.recv(1024)
     mlock.release()
 
     if received[:2] == "M:":
         #  Only delete user input if it has been successfully connected
         userentry.delete(0, END)
+
+        #  Update the member list
         _memberlist = received[2:].rstrip("::\r\n")
         member_list.update(_memberlist)
 
-        display_text(CmdWin,
+        insert_cmd(
                      "[Join] You (" + username + ")" +
                      " have successfully joined the chatroom \"" +
                      roomname + "\"!")
@@ -219,6 +312,8 @@ def do_Join():
         keepalive_thread.start()
         thread_list.append(keepalive_thread)
 
+        insert_cmd("[Join] Searching for peer...")
+
         #  Set buttons state
         Butt01['state'] = 'disabled'
         Butt03['state'] = 'disabled'
@@ -226,17 +321,26 @@ def do_Join():
     elif received[:2] == "F:":
         error_msg = ("[Join] Error: {:s}").format(
             received[2:].rstrip(":\r\n"))
-        display_text(CmdWin, error_msg)
+        insert_cmd(error_msg)
 
 
 def do_Send():
-    CmdWin.insert(1.0, "\nPress Send")
+    if not _connected_:
+        message = userentry.get()
+
+        if message is "":
+            showwarning("Please enter the room name",
+                    "The room name must not be null!")
+            return
+
+        insert_msg(username, message)
+        userentry.delete(0, END)
 
 
 def do_Quit():
-    global _running_, server_socket, listen_socket
+    global mlock, _running_, server_socket, listen_socket
 
-    display_text(CmdWin, "[Quit] Shutting down...")
+    insert_cmd("[Quit] Shutting down...")
     _running_ = False
 
     for t in thread_list:
@@ -246,64 +350,12 @@ def do_Quit():
     listen_socket.close()
     sys.exit(0)
 
-#
-#  Set up of Basic UI
-#
-win = Tk()
-win.title("MyP2PChat")
-
-#  Top Frame for Message display
-topframe = Frame(win, relief=RAISED, borderwidth=1)
-topframe.pack(fill=BOTH, expand=True)
-
-MsgWin = Text(topframe, height='15', padx=5, pady=5, fg="red",
-              exportselection=0, insertofftime=0)
-MsgWin.pack(side=LEFT, fill=BOTH, expand=True)
-
-topscroll = Scrollbar(topframe)
-topscroll.pack(side=RIGHT, fill=Y, expand=True)
-
-topscroll.config(command=MsgWin.yview)
-MsgWin.config(yscrollcommand=topscroll.set)
-
-#  Top Middle Frame for buttons
-topmidframe = Frame(win, relief=RAISED, borderwidth=1)
-topmidframe.pack(fill=X, expand=True)
-
-Butt01 = Button(topmidframe, width='8', relief=RAISED,
-                text="User", command=do_User)
-Butt01.pack(side=LEFT, padx=8, pady=8)
-
-Butt02 = Button(topmidframe, width='8', relief=RAISED,
-                text="List", command=do_List, state=DISABLED)
-Butt02.pack(side=LEFT, padx=8, pady=8)
-
-Butt03 = Button(topmidframe, width='8', relief=RAISED,
-                text="Join", command=do_Join, state=DISABLED)
-Butt03.pack(side=LEFT, padx=8, pady=8)
-
-Butt04 = Button(topmidframe, width='8', relief=RAISED,
-                text="Send", command=do_Send, state=DISABLED)
-Butt04.pack(side=LEFT, padx=8, pady=8)
-
-Butt05 = Button(topmidframe, width='8', relief=RAISED,
-                text="Quit", command=do_Quit, bg="red")
-Butt05.pack(side=LEFT, padx=8, pady=8)
-
-#  Lower Middle Frame for User input
-lowmidframe = Frame(win, relief=RAISED, borderwidth=1)
-lowmidframe.pack(fill=X, expand=True)
-
-userentry = Entry(lowmidframe, fg="blue")
-userentry.pack(fill=X, padx=4, pady=4, expand=True)
-
-#  Bottom Frame for displaying action info
-bottframe = Frame(win, relief=RAISED, borderwidth=1)
-bottframe.pack(fill=BOTH, expand=True)
-
-CmdWin = ScrolledText(bottframe, height='15', padx=5, pady=5, bg="#E9E9E9",
-                      exportselection=0, insertofftime=0, state=DISABLED)
-CmdWin.pack(side=LEFT, fill=BOTH, expand=True)
+# Add buttons functions
+Butt01.config(command=do_User)
+Butt02.config(command=do_List)
+Butt03.config(command=do_Join)
+Butt04.config(command=do_Send)
+Butt05.config(command=do_Quit)
 
 
 def main(argv):
@@ -340,7 +392,7 @@ def main(argv):
                        server_addr, server_port, listen_port,
                        "-" * 80
                    )
-    display_text(CmdWin, welcome_msg)
+    insert_cmd(welcome_msg)
 
     win.mainloop()
 
