@@ -8,6 +8,7 @@ Python version       : Python 2.7.10
 Version              : 0.1d
 """
 
+
 from __future__ import print_function
 from Tkinter import *
 from ScrolledText import *
@@ -16,6 +17,7 @@ import sys
 import socket
 import re
 import time
+import select
 import threading
 
 
@@ -35,13 +37,13 @@ roomname = ""
 msgid = 0
 
 thread_list = []
-socket_list = []
+backlink_list = []
 
 mlock = threading.Lock()
 
 _running_ = True
 _connected_ = False
-_KEEPALIVE_ = None
+_KEEPALIVE_ = ""
 _MYHASH_ = 0L
 
 
@@ -157,7 +159,6 @@ class MemberList(object):
 
         if new_hash == self.hashval:
             print("member list is up to date")
-            #  self.print_info()
         else:
             print("update member list!")
             self.hashval = new_hash
@@ -166,7 +167,7 @@ class MemberList(object):
             _splited = self.split(list)
             self.data[:] = []
 
-            # Remove ":" and hash it
+            #  Remove ":" and find its hash value
             for i in _splited:
                 _ = i.replace(':', '')
                 self.data.append((i, sdbm_hash(_)))
@@ -186,14 +187,15 @@ def keepalive():
 
     while True:
         for i in range(5):
-            time.sleep(0.5)
+            time.sleep(1)
 
             if _running_ is False:
                 print("[debug]", thd_name, "is dying... x(")
                 return
 
         mlock.acquire()
-        print("[debug] Send a keepalive message...", end="")
+        print("[debug] Thd.{}: Send a keepalive message...".format(
+            thd_name), end="")
         server_socket.send(_KEEPALIVE_)
         received = server_socket.recv(1024)
         mlock.release()
@@ -206,6 +208,55 @@ def keepalive():
                 received[2:].rstrip(":\r\n"))
             insert_cmd(error_msg)
 
+
+def listenport():
+    """ Thread to listen connection(s) using select """
+    global listen_socket, backlink_list
+
+    thd_name = threading.current_thread().getName()
+
+    try:
+        listen_socket.bind(('', listen_port))
+    except socket.error as e:
+        print("Socket bind error: ", e)
+        sys.exit(1)
+
+    listen_socket.listen(5)
+
+    while True:
+        for i in range(5):
+            time.sleep(1)
+            inready, outready, excready = select.select(
+                backlink_list, [], [], 1.0)
+
+            if _running_ is False:
+                print("[debug]", thd_name, "is dying... x(")
+                return
+
+        if not inready:
+            print("[debug] Thd.{}: Idling".format(thd_name))
+        else:
+            for s in inready:
+                if s is listen_socket:
+                    peer, address = listen_socket.accept()
+                    print("[debug] Thd.{}: New connection from".format(
+                        thd_name), peer.getpeername())
+                    backlink_list.append(peer)
+                else:
+                    #  data = s.recv(1024)
+                    print("Receive a message")
+                    # if a new message arrived, send to everybody
+                    # except the sender
+                    #  if data:
+                        #  for w in write_list:
+                            #  if w is not s:
+                                #  w.send(data)
+                    #  # if broken connection, remove that socket from READ
+                    #  # and WRITE lists
+                    #  else:
+                        #  read_list.remove(s)
+                        #  write_list.remove(s)
+                        #  s.close()
 
 #
 #  Functions to handle user input
@@ -223,6 +274,7 @@ def do_User():
         showwarning("Special character!", "Cannot contain \":\"")
         return
 
+    #  Only update usernmae if it has passed above conditions
     username = _un
     outstr = "[User] Username: " + username
     insert_cmd(outstr)
@@ -279,6 +331,7 @@ def do_Join():
         showwarning("Special character!", "Cannot contain \":\"")
         return
 
+    #  Only update roomname if it has passed above conditions
     roomname = _rm
 
     #  Username is now confirmed, generate hash value
@@ -298,12 +351,12 @@ def do_Join():
 
         #  Update the member list
         _memberlist = received[2:].rstrip("::\r\n")
+        print("[debug] Join trigger...", end="")
         member_list.update(_memberlist)
 
-        insert_cmd(
-                     "[Join] You (" + username + ")" +
-                     " have successfully joined the chatroom \"" +
-                     roomname + "\"!")
+        insert_cmd("[Join] You (" + username + ")" +
+                   " have successfully joined the chatroom \"" +
+                   roomname + "\"!")
 
         #  Start a thread to send keepalive
         print("[debug] Start Keepalive thread...")
@@ -313,6 +366,10 @@ def do_Join():
         thread_list.append(keepalive_thread)
 
         insert_cmd("[Join] Searching for peer...")
+        listen_thread = threading.Thread(name="Listen",
+                                            target=listenport)
+        listen_thread.start()
+        thread_list.append(keepalive_thread)
 
         #  Set buttons state
         Butt01['state'] = 'disabled'
@@ -325,6 +382,8 @@ def do_Join():
 
 
 def do_Send():
+    global _connected_
+
     if not _connected_:
         message = userentry.get()
 
@@ -373,15 +432,6 @@ def main(argv):
     except socket.error as e:
         print("Cannot connect to the server: ", e)
         sys.exit(1)
-
-    #  Setup listening port for peers
-    try:
-        listen_socket.bind(('', listen_port))
-    except socket.error as e:
-        print("Socket bind error: ", e)
-        sys.exit(1)
-
-    listen_socket.listen(5)
 
     #  Print welcome message
     welcome_msg = ("{:s}***** Welcome to P2P Chatroom *****\n"
