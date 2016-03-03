@@ -133,7 +133,7 @@ class MemberList(object):
     def __init__(self):
         self.data = []
         self.backlinks = []
-        self.forwardlink = [socket.socket(), 0L]
+        self.forwardlink = [None, None]
         self.peerno = 0
         self.hashval = 0L
         self.pos = -1
@@ -141,8 +141,8 @@ class MemberList(object):
     def print_info(self):
         print("[P2PInfo] Member\t:", self.data)
         print("[P2PInfo] Backlinks\t:", self.backlinks)
-        print("[P2PInfo] Forward\t:", self.backlinks)
-    #  print("[debug] Sorted pos.: ", self.pos + 1, "/", len(self.data), '\n')
+        print("[P2PInfo] Forward\t:", self.forwardlink)
+        print("[debug] Sorted pos.: ", self.pos, "/", len(self.data) - 1, '\n')
 
     def split(self, list):
         """ Split into [User:IP:Port] list
@@ -214,83 +214,136 @@ def send_keepalive():
 
 def build_forwardlink():
     """ Function to establish a forward link """
-    global member_list, roomname, username, userip, listen_port, msgid
+    global mlock, _MYHASH_, member_list
+    global roomname, username, userip, listen_port, msgid
 
     #  Check if there exists any user
     if len(member_list.data) == 1:
-        insert_cmd("[Conc] Yes, you are alone! :(")
+        insert_cmd("[Conc] You are the only user in the chatroom :(")
         return
 
-    if member_list.forwardlink[1] != 0L:
+    #  Check if forwardlink is already established
+    if member_list.forwardlink[0] != None:
         print("[ERROR] Forward link already established with",
               member_list.forwardlink[0].getpeername())
         return
 
-    #  Get my position
-    pos = (member_list.pos + 1) % len(member_list.data)
+    #  Try position
+    pos = (member_list.pos + 1) % (len(member_list.data))
+    print("[debug] Try position:", pos, member_list.data[pos])
+
     peer_hash = member_list.data[pos][1]
 
+    #  All backlinks hashes
     _backlink_hash = [x[1] for x in member_list.backlinks]
+    print("[debug]", _backlink_hash)
 
     while (peer_hash != _MYHASH_ and
            peer_hash != member_list.forwardlink[1] and
            peer_hash not in _backlink_hash):
-        print("[debug] Find a peer: ", member_list.data[pos])
+        print("[debug] Find a peer: ", pos, member_list.data[pos])
 
         peer_info = member_list.data[pos][0].split(':')
-        insert_cmd("[Conc] Try to connect \"{}\" with address {}:{}".format(
-            peer_info[0], peer_info[1], peer_info[2]
-        ))
+
+        _socket = socket.socket()
+        _socket.settimeout(1.0)
 
         try:
-            print("[debug] Establishing a forward link...")
-            _socket = socket.socket()
-            _socket.connect((peer_info[1], int(peer_info[2])))
+            insert_cmd("[Conc] Try to connect \"{}\" with address {}:{}".format(
+                peer_info[0], peer_info[1], peer_info[2]
+            ))
 
-            insert_cmd("[Conc] Successful! A forward link to " + peer_info[0])
-            member_list.forwardlink[0] = _socket
-            member_list.forwardlink[1] = peer_hash
+            _socket.connect((peer_info[1], int(peer_info[2])))
 
             _socket.send("P:{}:{}:{}:{}:{}::\r\n".format(
                 roomname, username, userip, listen_port, msgid
             ))
+            response = _socket.recv(512)
 
-            break
+            if response[:2] == "S:":
+                insert_cmd("[Conc] Successful! " +
+                           "A Forward link to user \"" +
+                           peer_info[0] + '\"')
+
+                member_list.forwardlink[0] = _socket
+                member_list.forwardlink[1] = peer_hash
+                member_list.print_info()
+
+                break
+            else:
+                insert_cmd("[Conc] Failed! Try next...")
+                pos = (pos + 1) % len(member_list.data)
+                _socket.close()
+                continue
         except socket.error as e:
             #  insert_cmd("[Conc] Cannot establish a forward link with " +
             #  peer_info[0] + "\n        " + e)
             print("[ERROR]", e)
+            insert_cmd(str(e) + ". Try next after 5s...")
 
             pos = (pos + 1) % len(member_list.data)
-            time.sleep(1.0)
+            #  time.sleep(5.0)
+            _socket.close()
             continue
 
+    pos = (pos + 1) % len(member_list.data)
 
-def connect_to_peer():
-    """ Thread to connect to peer """
+
+def connect_to_forwardlink():
+    """ Thread to check forwardlink establishment """
     global mlock, _running_, member_list
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
     print("[{}] Start...".format(thd_name))
 
-    insert_cmd("[Conc] Connecting to a peer...")
+    #  New user must search forwardlink first
+    insert_cmd("[Conc] Find a forward link...")
+
+    mlock.acquire()
     build_forwardlink()
+    mlock.release()
 
     while True:
-        for i in range(_SLEEPTIME_):
+        #  for i in range(_SLEEPTIME_):
+        for i in range(1):
             time.sleep(0.5)
 
             if _running_ is False:
-                print("[debug]", thd_name, "is dying... x(")
+                print("[{}] is dying... x(".format(thd_name))
                 return
 
-        if member_list.forwardlink[1] == 0L:
-            insert_cmd("[Conc] Not in connected state, try again... (no peer?)")
+        if member_list.forwardlink[0] == None:
+            insert_cmd("[Conc] No forward link is found, " +
+                       "try again...(no peer?)")
+
+            mlock.acquire()
             build_forwardlink()
+            mlock.release()
+            continue
         else:
-            print("[{}] Forward link: 1 \t Backward link(s): {} peer(s)".format(
-                thd_name, len(member_list.backlinks)))
+            try:
+                mlock.acquire()
+                member_list.forwardlink[0].settimeout(1.0)
+                response = member_list.forwardlink[0].recv(1024)
+                mlock.release()
+            except socket.timeout:
+                continue
+
+            if not response:
+                insert_cmd("[Conc] Forward link broken, build again...")
+
+                mlock.acquire()
+                member_list.forwardlink[0].close()
+                member_list.forwardlink[0] = None
+                member_list.forwardlink[1] = None
+
+                build_forwardlink()
+                mlock.release()
+            else:
+                print("[{}] Forward link: 1"
+                    "\t Backward link(s): {} peer(s)".format(
+                        thd_name, len(member_list.backlinks)))
 
 
 def listen_to_port():
@@ -308,7 +361,7 @@ def listen_to_port():
     readsock_list.append(listen_socket)
 
     while True:
-        inready, outready, excready = select.select(readsock_list, [], [], 5.0)
+        inready, outready, excready = select.select(readsock_list, [], [], 0.5)
 
         if _running_ is False:
             print("[{}] is dying... x(".format(thd_name))
@@ -328,8 +381,15 @@ def listen_to_port():
                     mlock.acquire()
                     data = s.recv(1024)
                     mlock.release()
+
                     if data:
+                        #  At this stage only if the connection has been
+                        #  established, will the program enter following
                         if data[:2] == "P:":
+                            mlock.acquire()
+                            s.send("S:{}::\r\n".format(msgid))
+                            mlock.release()
+
                             userinfo = data[2:].rstrip(":\r\n").split(':')
                             print("[{}] Received request message {}".format(
                                 thd_name, userinfo))
@@ -337,8 +397,13 @@ def listen_to_port():
                             _hashpeer = sdbm_hash(userinfo[1] + userinfo[2] +
                                                   userinfo[3])
 
+                            #  Add to backlink list for sending
+                            mlock.acquire()
                             member_list.backlinks.append([s, _hashpeer])
-                            insert_cmd("[Conc] " + userinfo[1] +
+                            mlock.release()
+
+                            #  Inform user
+                            insert_cmd("[Conc] User \"" + userinfo[1] + '\"'
                                        " (" + userinfo[2] + ":" + userinfo[3] +
                                        ") has connected to me")
                         else:
@@ -348,9 +413,17 @@ def listen_to_port():
                     else:
                         print("[{}] Broken connection from {}"
                               " removing...".format(thd_name, s.getpeername()))
-                        print(s)
-                        #  member_list.backlinks.remove(s)
+
+                        mlock.acquire()
+                        for i in member_list.backlinks:
+                            if i[0] == s:
+                                insert_cmd("[Conc] Disconnect to " +
+                                           str(s.getpeername()))
+                                member_list.backlinks.remove(i)
+
+                        readsock_list.remove(s)
                         s.close()
+                        mlock.release()
                         #  read_list.remove(s)
                         #  write_list.remove(s)
                         #  s.close()
@@ -470,7 +543,7 @@ def do_Join():
 
         #  Start a thread to connect a peer
         connect_thread = threading.Thread(name="Connect",
-                                          target=connect_to_peer)
+                                          target=connect_to_forwardlink)
         connect_thread.start()
         thread_list.append(connect_thread)
 
@@ -487,12 +560,14 @@ def do_Join():
 def do_Send():
     global member_list
 
+    member_list.print_info()
+
     if len(member_list.backlinks) < 1:
         message = userentry.get()
 
         if message is "":
-            showwarning("Please enter the room name",
-                        "The room name must not be null!")
+            showwarning("Please enter the message",
+                        "The message must not be null!")
             return
 
         insert_msg(username, message)
