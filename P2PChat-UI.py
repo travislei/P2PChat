@@ -223,10 +223,10 @@ def build_forwardlink():
         return
 
     #  Check if forwardlink is already established
-    if member_list.forwardlink[0] != None:
-        print("[ERROR] Forward link already established with",
-              member_list.forwardlink[0].getpeername())
-        return
+    #  if member_list.forwardlink[0] != None:
+        #  print("[ERROR] Forward link already established with",
+              #  member_list.forwardlink[0].getpeername())
+        #  return
 
     #  Try position
     pos = (member_list.pos + 1) % (len(member_list.data))
