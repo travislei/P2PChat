@@ -34,16 +34,13 @@ userip = socket.gethostbyname(hostname)
 username = None
 roomname = ""
 
-#  Message id
-msgid = 0
-
 #  Memberlist mutex lock
 mlock = threading.Lock()
 thread_list = []
 
 _running_ = True
 _KEEPALIVE_ = ""
-_MYHASH_ = 0L
+_MYHASH_ = 0
 _SLEEPTIME_ = 5
 
 
@@ -131,14 +128,14 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
-    global _MYHASH_, server_socket, roomname, username, msgid
+    global _MYHASH_, server_socket, roomname, username
 
     def __init__(self):
         self.data = []
         self.backlinks = []
         self.forwardlink = [None, None]
-        self.peerno = 0
-        self.hashval = 0L
+        self.msgid = 0
+        self.hashval = 0
         self.pos = -1
 
     def peerinfo(self):
@@ -148,19 +145,23 @@ class MemberList(object):
         print("[debug] Sorted pos.: ", self.pos, "/", len(self.data) - 1, '\n')
 
     def send_msg(self, msg):
-        rely_msg = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
-            roomname, _MYHASH_, username, msgid,
+        self.msgid += 1
+
+        print("[debug] Current msgid =", self.msgid)
+        msg_cmd = "T:{}:{}:{}:{:d}:{}:{}::\r\n".format(
+            roomname, _MYHASH_, username, int(self.msgid),
             len(msg), msg.encode("base64", "strict")
         )
 
-        print(rely_msg)
+        print(msg_cmd)
 
         if self.backlinks != []:
             for sock in self.backlinks:
-                sock[0].send(rely_msg)
+                sock[0].send(msg_cmd)
 
         if self.forwardlink[1] != None:
-                self.forwardlink[0].send(rely_msg)
+                self.forwardlink[0].send(msg_cmd)
+
 
     def rcev_msg(self, msg):
         #  Split into list [roomname, hash, username, msgid, length, content]
@@ -172,22 +173,43 @@ class MemberList(object):
         print(msg)
 
         if msg[0] != roomname:
-            insert_cmd("[Error] Receive message which is not in our chatroom!")
+            insert_cmd("[Error] Receive different chatrooms message!")
             return
 
-        backlink_hash = [x[1] for x in self.backlinks]
-        print(backlink_hash, self.forwardlink[1])
-        print(msg[1])
-        insert_msg(msg[2], msg[5])
+        _backlink_hash = [x[1] for x in self.backlinks]
 
-        if msg[1] == self.forwardlink[1]:
-            print("[debug] Receive message in our hash")
+        if str(msg[1]) == str(self.forwardlink[1]):
+            print("[debug] Receive message in forward link")
 
-        if msg[1] in backlink_hash or msg[1] == self.forwardlink[1]:
+            print("[debug] Received msgid: {}\tCurrent msgid: {}".format(
+                int(msg[3]), self.msgid
+            ))
+            print("[debug] Recv >= Current?", int(msg[3]) >= int(self.msgid))
 
-            if msg[3] >= msgid:
-                print("[debug] Print message")
+            if int(msg[3]) >= int(self.msgid):
+                print("[debug] msgid: ({} >= {}),"
+                      " print and update msgid...".format(msg[3], self.msgid))
                 insert_msg(msg[2], msg[5])
+                self.msgid = int(msg[3])
+
+                print("[debug] New msgid =", self.msgid)
+
+        if int(msg[1]) in _backlink_hash:
+            print("[debug] Receive message in backward link")
+
+            print("[debug] Received msgid: {}\tCurrent msgid: {}".format(
+                int(msg[3]), self.msgid
+            ))
+            print("[debug] Recv >= Current?", int(msg[3]) >= int(self.msgid))
+
+            if int(msg[3]) >= int(self.msgid):
+                print("[debug] msgid: ({} >= {}),"
+                      " print and update msgid...".format(msg[3], self.msgid))
+                insert_msg(msg[2], msg[5])
+                self.msgid = int(msg[3])
+
+                print("[debug] New msgid =", self.msgid)
+
 
     def split(self, list):
         """ Split into [User:IP:Port] list
@@ -262,7 +284,7 @@ def send_keepalive():
 def build_forwardlink():
     """ Function to establish a forward link """
     global mlock, _MYHASH_, member_list
-    global roomname, username, userip, listen_port, msgid
+    global roomname, username, userip, listen_port
 
     member_list.request_update()
 
@@ -288,8 +310,8 @@ def build_forwardlink():
     print("[debug] Current backlinks: ", _backlink_hash)
 
     while (peer_hash != _MYHASH_ and
-           peer_hash != member_list.forwardlink[1] and
-           peer_hash not in _backlink_hash):
+           str(peer_hash) != member_list.forwardlink[1] and
+           int(peer_hash) not in _backlink_hash):
 
         print("[debug] Find a peer: ", pos, member_list.data[pos])
 
@@ -305,7 +327,7 @@ def build_forwardlink():
 
             _socket.connect((peer_info[1], int(peer_info[2])))
             _socket.send("P:{}:{}:{}:{}:{}::\r\n".format(
-                roomname, username, userip, listen_port, msgid
+                roomname, username, userip, listen_port, member_list.msgid
             ))
             response = _socket.recv(512)
         except socket.timeout as e:
@@ -323,11 +345,18 @@ def build_forwardlink():
             _rcev_msgid = response[2:].rstrip(":\r\n")
             insert_cmd("[Conc] Successful! A Forward link to user \"" +
                         peer_info[0] + '\"')
-            print("[debug] Received message id:", _rcev_msgid)
+            print("[debug] Received msgid: {}\tCurrent msgid: {}".format(
+                _rcev_msgid, member_list.msgid
+            ))
 
+            if _rcev_msgid > member_list.msgid:
+                member_list.msgid = _rcev_msgid
+
+            mlock.acquire()
             member_list.forwardlink[0] = (_socket)
             member_list.forwardlink[1] = (peer_hash)
-            member_list.peerinfo()
+            mlock.release()
+            #  member_list.peerinfo()
 
             return
         else:
@@ -340,7 +369,7 @@ def build_forwardlink():
 
 def connect_to_forwardlink():
     """ Thread to check forwardlink establishment """
-    global mlock, _running_, member_list, msgid
+    global mlock, _running_, member_list
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
@@ -349,8 +378,8 @@ def connect_to_forwardlink():
     insert_cmd("[Conc] Finding a forward link...")
 
     while True:
-        for i in range(_SLEEPTIME_):
-            time.sleep(0.5)
+        #  for i in range(_SLEEPTIME_):
+            #  time.sleep(0.5)
 
             if _running_ is False:
                 print("[{}] is dying... x(".format(thd_name))
@@ -388,7 +417,7 @@ def connect_to_forwardlink():
 
 def listen_to_port():
     """ Thread to listen connection(s) using select """
-    global mlock, member_list, listen_socket, _running_, msgid
+    global mlock, member_list, listen_socket, _running_
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
@@ -401,7 +430,7 @@ def listen_to_port():
     readsock_list.append(listen_socket)
 
     while True:
-        inready, outready, excready = select.select(readsock_list, [], [], 0.5)
+        inready, outready, excready = select.select(readsock_list, [], [], 0.1)
 
         if _running_ is False:
             print("[{}] is dying... x(".format(thd_name))
@@ -426,7 +455,7 @@ def listen_to_port():
                         if data[:2] == "P:":
                             member_list.request_update()
 
-                            s.send("S:{}::\r\n".format(msgid))
+                            s.send("S:{}::\r\n".format(member_list.msgid))
 
                             userinfo = data[2:].rstrip(":\r\n").split(':')
                             print("[{}] Received request message {}".format(
@@ -595,7 +624,7 @@ def do_Join():
 
 
 def do_Send():
-    global member_list, msgid
+    global member_list
 
     message = userentry.get()
     member_list.peerinfo()
@@ -610,13 +639,12 @@ def do_Send():
 
     #  Check if there is any link to send
     if len(member_list.backlinks) > 0 or member_list.forwardlink[1] != None:
-        msgid += 1
         mlock.acquire()
         member_list.send_msg(message)
         mlock.release()
 
-        print("[debug] Rely message:", message)
-        print("[deubg] New msgid =", msgid)
+        print("[debug] Send message (ID: {}): {}".format(
+            member_list.msgid, message))
 
 
 def do_Quit():
