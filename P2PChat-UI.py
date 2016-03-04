@@ -301,6 +301,8 @@ def connect_to_forwardlink():
     thd_name = "Thd." + threading.current_thread().getName()
     print("[{}] Start...".format(thd_name))
 
+    insert_cmd("[Conc] Finding a forward link...")
+
     while True:
         for i in range(_SLEEPTIME_):
         #  for i in range(1):
@@ -309,8 +311,6 @@ def connect_to_forwardlink():
             if _running_ is False:
                 print("[{}] is dying... x(".format(thd_name))
                 return
-
-        insert_cmd("[Conc] Finding a forward link...")
 
         if member_list.forwardlink[0] == None:
             insert_cmd("[Conc] No forward link is found, try again...")
@@ -376,11 +376,11 @@ def listen_to_port():
                         #  At this stage only if the connection has been
                         #  established, will the program enter following
                         if data[:2] == "P:":
-                            member_list.request_update()
-
                             mlock.acquire()
-                            s.send("S:{}::\r\n".format(msgid))
+                            member_list.request_update()
                             mlock.release()
+
+                            s.send("S:{}::\r\n".format(msgid))
 
                             userinfo = data[2:].rstrip(":\r\n").split(':')
                             print("[{}] Received request message {}".format(
