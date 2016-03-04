@@ -37,6 +37,7 @@ roomname = ""
 #  Memberlist mutex lock
 mlock = threading.Lock()
 thread_list = []
+thread_listenforward= None
 
 _running_ = True
 _KEEPALIVE_ = ""
@@ -280,10 +281,35 @@ def send_keepalive():
 
         member_list.request_update()
 
+def listen_forwadlink(sockfd):
+    global mlock, member_list
+
+    #  Get thread name
+    thd_name = "Thd." + threading.current_thread().getName()
+    print("[{}] Start...".format(thd_name))
+
+    sockfd.settimeout(0.1)
+    while True:
+        try:
+            data = sockfd.recv(1024)
+        except socket.timeout:
+            continue
+        except socket.error:
+            break
+
+        if data:
+            print("[{}] Recive message: {}".format(thd_name, data))
+
+            mlock.acquire()
+            member_list.rcev_msg(data)
+            mlock.release()
+        else:
+            sockfd.close()
+
 
 def build_forwardlink():
     """ Function to establish a forward link """
-    global mlock, _MYHASH_, member_list
+    global mlock, _MYHASH_, member_list, thread_listenforward
     global roomname, username, userip, listen_port
 
     member_list.request_update()
@@ -349,15 +375,21 @@ def build_forwardlink():
                 _rcev_msgid, member_list.msgid
             ))
 
+            #  Update to newest msgid
             if _rcev_msgid > member_list.msgid:
                 member_list.msgid = _rcev_msgid
 
+            #  Update forwadlink
             mlock.acquire()
             member_list.forwardlink[0] = (_socket)
             member_list.forwardlink[1] = (peer_hash)
             mlock.release()
-            #  member_list.peerinfo()
 
+            #  Thread to listen forwardlink message
+            thread_listenforward = threading.Thread(name="Forwardlistener",
+                                                    target=listen_forwadlink,
+                                                    args=(_socket,))
+            thread_listenforward.start()
             return
         else:
             insert_cmd("[Conc] Failed! Try next...")
@@ -369,7 +401,7 @@ def build_forwardlink():
 
 def connect_to_forwardlink():
     """ Thread to check forwardlink establishment """
-    global mlock, _running_, member_list
+    global mlock, _running_, member_list, thread_listenforward
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
@@ -378,8 +410,8 @@ def connect_to_forwardlink():
     insert_cmd("[Conc] Finding a forward link...")
 
     while True:
-        #  for i in range(_SLEEPTIME_):
-            #  time.sleep(0.5)
+        for i in range(_SLEEPTIME_):
+            time.sleep(0.5)
 
             if _running_ is False:
                 print("[{}] is dying... x(".format(thd_name))
@@ -397,13 +429,13 @@ def connect_to_forwardlink():
             except socket.timeout as e:
                 continue
 
-            if data:
-                print("[{}] Recive message: {}".format(thd_name, data))
+            if not data:
+                #  print("[{}] Recive message: {}".format(thd_name, data))
 
-                mlock.acquire()
-                member_list.rcev_msg(data)
-                mlock.release()
-            else:
+                #  mlock.acquire()
+                #  member_list.rcev_msg(data)
+                #  mlock.release()
+            #  else:
                 insert_cmd("[Conc] Forward link is broken, build again...")
 
                 mlock.acquire()
@@ -411,6 +443,8 @@ def connect_to_forwardlink():
                 member_list.forwardlink[0] = None
                 member_list.forwardlink[1] = None
                 mlock.release()
+
+                thread_listenforward.join()
 
                 build_forwardlink()
 
@@ -430,7 +464,7 @@ def listen_to_port():
     readsock_list.append(listen_socket)
 
     while True:
-        inready, outready, excready = select.select(readsock_list, [], [], 0.1)
+        inready, outready, excready = select.select(readsock_list, [], [], 0.5)
 
         if _running_ is False:
             print("[{}] is dying... x(".format(thd_name))
