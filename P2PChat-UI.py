@@ -5,7 +5,7 @@ Student name and No. : LEI WAN HONG, 3035202750
 Student name and No. : HO KA KUEN,
 Development platform : Mac OS X 10.11.3
 Python version       : Python 2.7.10
-Version              : 0.1d
+Version              : 0.5d
 """
 
 from __future__ import print_function
@@ -163,9 +163,12 @@ class MemberList(object):
                 self.forwardlink[0].send(rely_msg)
 
     def rcev_msg(self, msg):
-        #  Split into [roomname, hash, username, msgid, length, content] list
+        #  Split into list [roomname, hash, username, msgid, length, content]
         msg = msg[2:].rstrip(":\r\n").split(':')
+
+        #  Decode the message
         msg[5] = msg[5].decode("base64", "strict")
+
         print(msg)
 
         if msg[0] != roomname:
@@ -366,8 +369,6 @@ def connect_to_forwardlink():
                 continue
 
             if data:
-                #  TODO: Receive message from forward link
-                insert_cmd("[Conc] Forward link is already established.")
                 print("[{}] Recive message: {}".format(thd_name, data))
 
                 mlock.acquire()
@@ -444,7 +445,6 @@ def listen_to_port():
                                        " (" + userinfo[2] + ":" + userinfo[3] +
                                        ") has connected to me")
                         else:
-                            #  TODO: Receive message from backlink
                             print("[{}] Receive a message: {}".format(
                                 thd_name, data
                             ))
