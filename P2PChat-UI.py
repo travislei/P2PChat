@@ -130,15 +130,15 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
-    global _MYHASH_, server_socket, roomname, username, _running_
+    global _MYHASH_, server_socket, roomname, username
 
     def __init__(self):
-        self.data = []
-        self.backlinks = []
-        self.forwardlink = [None, None]
-        self.msgid = 0
-        self.hashval = 0
-        self.pos = -1
+        self.data = []                      # Peer list
+        self.hashval = 0                    # Hashval of Peer List
+        self.backlinks = []                 # Backward link list
+        self.forwardlink = [None, None]     # Forward link [sockfd, hashval]
+        self.msgid = 0                      # Current message id
+        self.pos = -1                       # Search peer position
 
     def peerinfo(self):
         print("[P2PInfo] Member\t:", self.data)
@@ -160,11 +160,11 @@ class MemberList(object):
 
     def print_msg(self, username, msg, recv_msgid):
         #  DEBUG: Printing
-        print("[print_msg] Receive message in forward link")
+        #  print("[print_msg] Receive message in forward link")
 
-        print("[print_msg] Received msgid: {}\tCurrent msgid: {}".format(
-           recv_msgid, self.msgid
-        ))
+        #  print("[print_msg] Received msgid: {}\tCurrent msgid: {}".format(
+        #  recv_msgid, self.msgid
+        #  ))
 
         if recv_msgid > int(self.msgid):
             print("[print_msg] msgid: ({} > {}),"
@@ -195,9 +195,18 @@ class MemberList(object):
         if self.forwardlink[1] != None:
                 self.forwardlink[0].send(msg_cmd)
 
+    def rely_msg(self, sockfd, msg):
+        print("[rely_msg] Rely message to peers...")
+
+        try:
+            sockfd.send(msg)
+        except socket.error as e:
+            print("[rely_msg]", e)
+
     def recv_msg(self, msg):
         #  Split into list [roomname, hash, username, msgid, length, content]
         #  Decode the message
+        orig_msg = msg
         msg = msg[2:].rstrip(":\r\n").split(':')
         msg[5] = msg[5].decode("base64", "strict")
 
@@ -207,14 +216,36 @@ class MemberList(object):
             insert_cmd("[Error] Receive different chatrooms message!")
             return
 
-        _backlink_hash = [x[1] for x in self.backlinks]
+        backlink_hash = [x[1] for x in self.backlinks]
 
-        #  TODO: Flooding message
+        self.print_msg(msg[2], msg[5], int(msg[3]))
+
+        #  Check it source and rely to peers, if from forward link
         if str(msg[1]) == str(self.forwardlink[1]):
-            self.print_msg(msg[2], msg[5], int(msg[3]))
+            print("[recv_msg] From forward link")
 
-        if int(msg[1]) in _backlink_hash:
-            self.print_msg(msg[2], msg[5], int(msg[3]))
+            print("[recv_msg]", self.backlinks)
+            #  As it is from forwardlink, rely to all backlinks
+            if self.backlinks != []:
+                for s in self.backlinks:
+                    self.rely_msg(s[0], orig_msg)
+
+        #  if from one of the backward link
+        elif int(msg[1]) in backlink_hash:
+            print("[recv_msg] From backward link")
+            #  self.print_msg(msg[2], msg[5], int(msg[3]))
+
+            #  Rely to forward link, if any
+            if self.forwardlink[1] != None:
+                self.rely_msg(self.forwardlink[0], orig_msg)
+
+            print("[recv_msg]", self.backlinks)
+            #  Rely to all backward links exculding the sender
+            for s in self.backlinks:
+                print("[recv_msg] Checkout ", s[1], str(s[1]) == str(msg[1]))
+                if str(s[1]) != str(msg[1]):
+                    print("[recv_msg] Rely to:", s[1])
+                    self.rely_msg(s[0], orig_msg)
 
     def split(self, list):
         """ Split into [User:IP:Port] list
@@ -286,6 +317,11 @@ class MemberList(object):
                peer_hash == self.forwardlink[1] or
                peer_hash in backlink_hash):
 
+            #  TOFIX: Brute-foce quitting a thread? :/
+            if not _running_:
+                sys.exit(0)
+                #  break
+
             #  After updated to 1 user then break the loop
             #  It is necessary since there is a case that
             #  a forwardlink just leave after the update
@@ -294,12 +330,8 @@ class MemberList(object):
             #  if 2 users then wait for 2s and retry
             elif len(self.data) == 2:
                 insert_cmd("[Conc] Waiting 2s for another user")
-                time.sleep(2.0)
+                time.sleep(1.0)
                 self.request_update()
-
-                if _running_ is False:
-                    break
-
                 continue
 
             peer_info = self.data[peerpos][0].split(':')
@@ -313,11 +345,10 @@ class MemberList(object):
             print("[try_peerpos] Peerhash:", peer_hash)
             print("[try_peerpos] backlink_hash:", backlink_hash, '\n')
 
-            #  Add 1 to peerpos and retry
-            peerpos = (peerpos + 1) % len(self.data)
-
             #  Need to update and retry
             self.request_update()
+
+            peerpos = (peerpos + 1) % len(self.data)
             backlink_hash = [x[1] for x in self.backlinks]
             peer_hash = member_list.data[peerpos][1]
 
