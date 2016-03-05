@@ -158,6 +158,24 @@ class MemberList(object):
         else:
             insert_cmd("[Conc] Your are disconnected!")
 
+    def print_msg(self, username, msg, recv_msgid):
+        #  DEBUG: Printing
+        print("[print_msg] Receive message in forward link")
+
+        print("[print_msg] Received msgid: {}\tCurrent msgid: {}".format(
+           recv_msg, self.msgid
+        ))
+
+        if recv_msgid > int(self.msgid):
+            print("[print_msg] msgid: ({} > {}),"
+                  " print and update msgid...".format(recv_msgid, self.msgid))
+
+            #  Print it on the screen
+            insert_msg(username, msg)
+            self.msgid = recv_msgid
+
+            print("[print_msg] New msgid =", self.msgid)
+
     def send_msg(self, msg):
         #  print("Type of msgid is int?", type(self.msgid) is int)
         self.msgid += 1
@@ -177,7 +195,7 @@ class MemberList(object):
         if self.forwardlink[1] != None:
                 self.forwardlink[0].send(msg_cmd)
 
-    def rcev_msg(self, msg):
+    def recv_msg(self, msg):
         #  Split into list [roomname, hash, username, msgid, length, content]
         #  Decode the message
         msg = msg[2:].rstrip(":\r\n").split(':')
@@ -193,36 +211,10 @@ class MemberList(object):
 
         #  TODO: Flooding message
         if str(msg[1]) == str(self.forwardlink[1]):
-            print("[debug] Receive message in forward link")
-
-            print("[debug] Received msgid: {}\tCurrent msgid: {}".format(
-                int(msg[3]), self.msgid
-            ))
-            print("[debug] Recv >= Current?", int(msg[3]) >= int(self.msgid))
-
-            if int(msg[3]) > int(self.msgid):
-                print("[debug] msgid: ({} >= {}),"
-                      " print and update msgid...".format(msg[3], self.msgid))
-                insert_msg(msg[2], msg[5])
-                self.msgid = int(msg[3])
-
-                print("[debug] New msgid =", self.msgid)
+            self.print_msg(msg[2], msg[5], int(msg[3]))
 
         if int(msg[1]) in _backlink_hash:
-            print("[debug] Receive message in backward link")
-
-            print("[debug] Received msgid: {}\tCurrent msgid: {}".format(
-                int(msg[3]), self.msgid
-            ))
-            print("[debug] Recv >= Current?", int(msg[3]) >= int(self.msgid))
-
-            if int(msg[3]) > int(self.msgid):
-                print("[debug] msgid: ({} >= {}),"
-                      " print and update msgid...".format(msg[3], self.msgid))
-                insert_msg(msg[2], msg[5])
-                self.msgid = int(msg[3])
-
-                print("[debug] New msgid =", self.msgid)
+            self.print_msg(msg[2], msg[5], int(msg[3]))
 
     def split(self, list):
         """ Split into [User:IP:Port] list
@@ -273,19 +265,28 @@ class MemberList(object):
     def try_peerpos(self):
         self.request_update()
 
+        #  Only 1 user then quit
         if len(self.data) == 1:
             return -1
 
+        #  Let the position be peerpos and get it hashval
         peerpos = (self.pos + 1) % len(self.data)
-
-        backlink_hash = [x[1] for x in self.backlinks]
         peer_hash = member_list.data[peerpos][1]
 
+        #  Generate backlink hashval
+        backlink_hash = [x[1] for x in self.backlinks]
+
+        #  Incorrect peer if its hash values is
+        #      1. equal to my hashval <=> equal to myself
+        #      2. equal to forwardlink
+        #      3. is in the backlink
         while (peer_hash == _MYHASH_ or
                peer_hash == self.forwardlink[1] or
                peer_hash in backlink_hash):
 
             #  After updated to 1 user then break the loop
+            #  It is necessary since there is a case that
+            #  a forwardlink just leave after the update
             if len(self.data) == 1:
                 return -1
             #  if 2 users then wait for 2s and retry
@@ -352,6 +353,7 @@ def listen_forwardlink(sockfd):
 
     #  Set timeout for the socket
     sockfd.settimeout(0.1)
+
     while _run_fdlistener_:
         try:
             msg = sockfd.recv(1024)
@@ -362,7 +364,7 @@ def listen_forwardlink(sockfd):
             print("[{}] Recive message: {}".format(thd_name, msg))
 
             mlock.acquire()
-            member_list.rcev_msg(msg)
+            member_list.recv_msg(msg)
             mlock.release()
 
     sockfd.close()
@@ -375,8 +377,7 @@ def build_forwardlink():
     global mlock, _MYHASH_, member_list, thread_listenforward, _run_fdlistener_
     global roomname, username, userip, listen_port, _running_
 
-    member_list.request_update()
-
+    #  Get the peer position
     pos = member_list.try_peerpos()
 
     #  Check if there exists any user
@@ -384,20 +385,16 @@ def build_forwardlink():
         insert_cmd("[ERRO] You are the only user in the chatroom :(")
         return
 
-    #  Check if forwardlink is already established
-    #  if member_list.forwardlink[1] != None:
-        #  insert_cmd("[Conc] Forward link already established with " +
-        #  return
-
+    #  Get the necessary info now
     peer_info = member_list.data[pos][0].split(':')
     peer_hash = member_list.data[pos][1]
     print("[P2P] Try pos.:", pos)
     print("[P2P] Peerinfo:", peer_info)
 
+    #  Build a socket and try to connect it!
     sockfd = socket.socket()
     sockfd.settimeout(1.0)
 
-    #  Connect to the peer
     try:
         insert_cmd("[Conc] Connecting \"{}\" with address {}:{}".format(
             peer_info[0], peer_info[1], peer_info[2]
@@ -451,10 +448,6 @@ def build_forwardlink():
         sockfd.close()
         return
 
-    #  Otherwise try next position
-    #  pos = (pos + 1) % len(member_list.data)
-    #  print("[P2P] Try next position:", pos, member_list.data[pos])
-
 
 def connect_to_forwardlink():
     """ Thread to check if forwardlink has been established or not """
@@ -467,24 +460,24 @@ def connect_to_forwardlink():
     insert_cmd("[Conc] Finding a forward link...")
 
     #  DEBUG: Allow other peers to connect to me first
-    time.sleep(10.0)
+    time.sleep(5.0)
 
     while _running_:
-        #  for i in range(_SLEEPTIME_):
-        for i in range(1):
+        for i in range(5):
             time.sleep(0.5)
 
             if _running_ is False:
                 print("[{}] is dying... x(".format(thd_name))
                 return
 
-        #  insert_cmd("[Conc] Checking forward link connection")
+        #  Check forwardlink connection, if no then build one!
         if member_list.forwardlink[0] == None:
             insert_cmd("[Conc] No forward link is found, try again...")
 
             build_forwardlink()
 
             member_list.print_state()
+        #  Test if it is still connected
         else:
             #  Set timeout so that we will not wait forever
             member_list.forwardlink[0].settimeout(1.0)
@@ -494,6 +487,7 @@ def connect_to_forwardlink():
             except socket.timeout:
                 continue
 
+            #  Oh need to find new one!
             if not data:
                 insert_cmd("[Conc] Forward link is broken, build again...")
 
@@ -503,9 +497,11 @@ def connect_to_forwardlink():
                 mlock.acquire()
                 member_list.forwardlink[0] = None
                 member_list.forwardlink[1] = None
-                build_forwardlink()
                 mlock.release()
 
+                build_forwardlink()
+
+                #  Print connection state to the user
                 member_list.print_state()
 
 
@@ -545,7 +541,7 @@ def listen_to_port():
 
                     if data:
                         #  At this stage only if the connection has been
-                        #  established, will the program enter following
+                        #  established will the program enter following code
                         if data[:2] == "P:":
                             member_list.request_update()
 
@@ -586,7 +582,7 @@ def listen_to_port():
                             ))
 
                             mlock.acquire()
-                            member_list.rcev_msg(data)
+                            member_list.recv_msg(data)
                             mlock.release()
                     else:
                         print("[{}] Broken connection from {}"
