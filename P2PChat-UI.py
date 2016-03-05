@@ -130,7 +130,7 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
-    global _MYHASH_, server_socket, roomname, username
+    global _MYHASH_, server_socket, roomname, username, _running_
 
     def __init__(self):
         self.data = []
@@ -163,7 +163,7 @@ class MemberList(object):
         print("[print_msg] Receive message in forward link")
 
         print("[print_msg] Received msgid: {}\tCurrent msgid: {}".format(
-           recv_msg, self.msgid
+           recv_msgid, self.msgid
         ))
 
         if recv_msgid > int(self.msgid):
@@ -263,6 +263,8 @@ class MemberList(object):
             insert_cmd(error_msg)
 
     def try_peerpos(self):
+        global _running_
+
         self.request_update()
 
         #  Only 1 user then quit
@@ -276,7 +278,7 @@ class MemberList(object):
         #  Generate backlink hashval
         backlink_hash = [x[1] for x in self.backlinks]
 
-        #  Incorrect peer if its hash values is
+        #  Try next peer if its hash values is
         #      1. equal to my hashval <=> equal to myself
         #      2. equal to forwardlink
         #      3. is in the backlink
@@ -294,6 +296,10 @@ class MemberList(object):
                 insert_cmd("[Conc] Waiting 2s for another user")
                 time.sleep(2.0)
                 self.request_update()
+
+                if _running_ is False:
+                    break
+
                 continue
 
             peer_info = self.data[peerpos][0].split(':')
