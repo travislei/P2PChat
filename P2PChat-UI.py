@@ -5,7 +5,7 @@ Student name and No. : LEI WAN HONG, 3035202750
 Student name and No. : HO KA KUEN,
 Development platform : Mac OS X 10.11.3
 Python version       : Python 2.7.10
-Version              : 0.7d
+Version              : 0.8d
 """
 
 from __future__ import print_function
@@ -156,9 +156,10 @@ class MemberList(object):
         if self.is_connected():
             insert_cmd("[Conc] You are connected to peer(s)")
         else:
-            insert_cmd("[Conc] Your are disconnected!")
+            insert_cmd("[ERRO] Your are disconnected!")
 
     def print_msg(self, username, msg, recv_msgid):
+        """ Compare msgid and print on the screen """
         #  DEBUG: Printing
         #  print("[print_msg] Receive message in forward link")
 
@@ -167,10 +168,10 @@ class MemberList(object):
         #  ))
 
         if recv_msgid > int(self.msgid):
+            #  DEBUG: Printing
             #  print("[print_msg] msgid: ({} > {}),"
                 #  " print and update msgid...".format(recv_msgid, self.msgid))
 
-            #  Print it on the screen
             insert_msg(username, msg)
             self.msgid = recv_msgid
 
@@ -184,7 +185,6 @@ class MemberList(object):
             return [x[1] for x in self.backlinks]
 
     def send_msg(self, msg):
-        #  print("Type of msgid is int?", type(self.msgid) is int)
         self.msgid += 1
 
         print("[debug] Current msgid =", self.msgid)
@@ -240,7 +240,6 @@ class MemberList(object):
         #  if from one of the backward link
         elif int(msg[1]) in backlink_hash:
             print("[recv_msg] From backward link")
-            #  self.print_msg(msg[2], msg[5], int(msg[3]))
 
             #  Rely to forward link, if any
             if self.forwardlink[1] != None:
@@ -340,6 +339,7 @@ class MemberList(object):
                 #  sys.exit(0)
                 break
 
+            #  TOFIX: Redundant code segment?
             #  If after update there is only 1 user then break the loop
             #  it is necessary since there is a case that
             #  a forwardlink just leave after the update
@@ -815,14 +815,14 @@ def do_Send():
 
 
 def do_Quit():
-    global mlock, _running_, server_socket, listen_socket, member_list
+    global _running_, server_socket, listen_socket
     global thread_listenforward, _run_fdlistener_
 
     insert_cmd("[Quit] Shutting down...")
     _running_ = False
     _run_fdlistener_ = False
 
-    if thread_listenforward is not None and thread_listenforward.is_alive():
+    if thread_listenforward is not None or thread_listenforward.is_alive():
         thread_listenforward.join()
 
     for t in thread_list:
