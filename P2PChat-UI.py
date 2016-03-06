@@ -35,15 +35,15 @@ username = None
 roomname = ""
 
 #  Memberlist mutex lock
-mlock = threading.Lock()
+mlock = threading.Lock()    # Mutex lock for Memberlist obj
 thread_list = []
 thread_listenforward = None
 
-_running_ = True
-_run_fdlistener_ = False
-_KEEPALIVE_ = ""
-_MYHASH_ = 0
-_SLEEPTIME_ = 5
+_run_fdlistener_ = False    # Flag for "listen_forwardlink" thread
+_running_ = True            # Normal thread running flag
+_KEEPALIVE_ = ""            # Unique keepalive message, defined in do_Join
+_MYHASH_ = 0                # Unique hash value
+_SLEEPTIME_ = 5             # Thread sleep
 
 
 #
@@ -167,14 +167,21 @@ class MemberList(object):
         #  ))
 
         if recv_msgid > int(self.msgid):
-            print("[print_msg] msgid: ({} > {}),"
-                  " print and update msgid...".format(recv_msgid, self.msgid))
+            #  print("[print_msg] msgid: ({} > {}),"
+                #  " print and update msgid...".format(recv_msgid, self.msgid))
 
             #  Print it on the screen
             insert_msg(username, msg)
             self.msgid = recv_msgid
 
             print("[print_msg] New msgid =", self.msgid)
+
+    def get_backlinkhash(self):
+        """ Generate the backlink hashval """
+        if self.backlinks == []:
+            return []
+        else:
+            return [x[1] for x in self.backlinks]
 
     def send_msg(self, msg):
         #  print("Type of msgid is int?", type(self.msgid) is int)
@@ -205,27 +212,27 @@ class MemberList(object):
 
     def recv_msg(self, msg):
         #  Split into list [roomname, hash, username, msgid, length, content]
-        #  Decode the message
+        #  and decode the message
         orig_msg = msg
         msg = msg[2:].rstrip(":\r\n").split(':')
         msg[5] = msg[5].decode("base64", "strict")
 
-        print(msg)
+        #  DEBUG: Print the message
+        print("[recv_msg]", msg)
 
         if msg[0] != roomname:
             insert_cmd("[Error] Receive different chatrooms message!")
             return
 
-        backlink_hash = [x[1] for x in self.backlinks]
-
+        #  Print it!
         self.print_msg(msg[2], msg[5], int(msg[3]))
 
-        #  Check it source and rely to peers, if from forward link
-        if str(msg[1]) == str(self.forwardlink[1]):
-            print("[recv_msg] From forward link")
+        #  Prepare to rely message, first generate the hasval of backlinks
+        backlink_hash = self.get_backlinkhash()
 
-            print("[recv_msg]", self.backlinks)
-            #  As it is from forwardlink, rely to all backlinks
+        #  Check it source and rely to peers,
+        #  if from forward link, rely to all backlinks, if any
+        if str(msg[1]) == str(self.forwardlink[1]):
             if self.backlinks != []:
                 for s in self.backlinks:
                     self.rely_msg(s[0], orig_msg)
@@ -294,6 +301,7 @@ class MemberList(object):
             insert_cmd(error_msg)
 
     def try_peerpos(self):
+        """ Next peer position for P2P connection """
         global _running_
 
         self.request_update()
@@ -302,12 +310,22 @@ class MemberList(object):
         if len(self.data) == 1:
             return -1
 
-        #  Let the position be peerpos and get it hashval
+        #  Let the position be peerpos and get its hashval
         peerpos = (self.pos + 1) % len(self.data)
         peer_hash = member_list.data[peerpos][1]
 
         #  Generate backlink hashval
-        backlink_hash = [x[1] for x in self.backlinks]
+        backlink_hash = self.get_backlinkhash()
+
+        #  Generate current user hashval, except ourselves
+        data_hash = []
+        for d in self.data:
+            if d[1] != _MYHASH_:
+                data_hash.append(d[1])
+
+        #  Check if all user has connected to me
+        if set(data_hash) == set(backlink_hash):
+            return -2
 
         #  Try next peer if its hash values is
         #      1. equal to my hashval <=> equal to myself
@@ -319,11 +337,11 @@ class MemberList(object):
 
             #  TOFIX: Brute-foce quitting a thread? :/
             if not _running_:
-                sys.exit(0)
-                #  break
+                #  sys.exit(0)
+                break
 
-            #  After updated to 1 user then break the loop
-            #  It is necessary since there is a case that
+            #  If after update there is only 1 user then break the loop
+            #  it is necessary since there is a case that
             #  a forwardlink just leave after the update
             if len(self.data) == 1:
                 return -1
@@ -349,7 +367,7 @@ class MemberList(object):
             self.request_update()
 
             peerpos = (peerpos + 1) % len(self.data)
-            backlink_hash = [x[1] for x in self.backlinks]
+            backlink_hash = self.get_backlinkhash()
             peer_hash = member_list.data[peerpos][1]
 
         return peerpos
@@ -420,6 +438,11 @@ def build_forwardlink():
     #  Check if there exists any user
     if pos == -1:
         insert_cmd("[ERRO] You are the only user in the chatroom :(")
+        return
+    elif pos == -2:
+        insert_cmd("[ERRO] All users have connected to me," +
+                   " wait 2s for another user")
+        time.sleep(2.0)
         return
 
     #  Get the necessary info now
@@ -716,7 +739,7 @@ def do_Join():
     #  Only update roomname if it has passed the bove conditions
     roomname = _rm
 
-    #  Username is now confirmed, generate the hash value
+    #  Username is now confirmed, generate the unique hash value
     _MYHASH_ = sdbm_hash(username + userip + str(listen_port))
 
     #  Send message to the server
@@ -730,13 +753,13 @@ def do_Join():
         userentry.delete(0, END)
 
         #  Update the member list
-        _memberlist = received[2:].rstrip("::\r\n")
+        memberlist = received[2:].rstrip("::\r\n")
         print("[debug] Join trigger...", end="")
-        member_list.update(_memberlist)
+        member_list.update(memberlist)
 
-        insert_cmd("[Join] You (" + username + ")" +
-                   " have successfully joined the chatroom \"" +
-                   roomname + "\"!\n" + "       User(s) online: " +
+        insert_cmd("[Join] You have successfully joined the chatroom " +
+                   roomname + " as \"" + username + "\"!\n" +
+                   "       User(s) online: " +
                    str(len(member_list.data)))
 
         #  Start a thread to send keepalive
