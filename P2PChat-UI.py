@@ -336,8 +336,8 @@ class MemberList(object):
 
             #  TOFIX: Brute-foce quitting a thread? :/
             if not _running_:
-                #  sys.exit(0)
-                break
+                sys.exit(0)
+                #  break
 
             #  TOFIX: Redundant code segment?
             #  If after update there is only 1 user then break the loop
@@ -364,7 +364,7 @@ class MemberList(object):
             print("[try_peerpos] backlink_hash:", backlink_hash, '\n')
 
             #  Need to update and retry
-            self.request_update()
+            #  self.request_update()
 
             peerpos = (peerpos + 1) % len(self.data)
             backlink_hash = self.get_backlinkhash()
@@ -822,7 +822,7 @@ def do_Quit():
     _running_ = False
     _run_fdlistener_ = False
 
-    if thread_listenforward is not None or thread_listenforward.is_alive():
+    if thread_listenforward is not None and thread_listenforward.is_alive():
         thread_listenforward.join()
 
     for t in thread_list:
