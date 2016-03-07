@@ -192,7 +192,7 @@ class MemberList(object):
 
     #  TOFIX: Buggy Backward link forwarding
     def rely_msg(self, sockfd, msg):
-        print("[rely_msg] Rely message to peers...")
+        print("[rely_msg] Rely message to ", sockfd.getpeername())
 
         try:
             sockfd.send(msg)
@@ -213,7 +213,6 @@ class MemberList(object):
             print("[recv_msg] I have the newer msg, abort printing")
             return
         else:
-            #  elif self.msgid < int(msg[3]):
             self.msgid = int(msg[3])
             print("[print_msg] Update to new msgid:", self.msgid)
 
