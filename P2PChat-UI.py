@@ -344,9 +344,12 @@ class MemberList(object):
             #  if 2 users then wait for 2s and retry
             elif len(self.data) == 2:
                 insert_cmd("[Conc] Waiting 2s for another user")
-                time.sleep(1.0)
-                self.request_update()
-                continue
+                time.sleep(2.0)
+                #  self.request_update()
+                #  backlink_hash = self.get_backlinkhash()
+                #  peer_hash = member_list.data[peerpos][1]
+                #  continue
+                return -2
 
             peer_info = self.data[peerpos][0].split(':')
 
