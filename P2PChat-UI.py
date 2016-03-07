@@ -2,7 +2,7 @@
 
 """
 Student name and No. : LEI WAN HONG, 3035202750
-Student name and No. : HO KA KUEN,
+Student name and No. : HO KA KUEN, 3035074878
 Development platform : Mac OS X 10.11.3
 Python version       : Python 2.7.10
 Version              : 0.8d
@@ -130,7 +130,7 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
-    global _MYHASH_, server_socket, roomname, username
+    global _MYHASH_, server_socket, roomname, username, Butt04
 
     def __init__(self):
         self.data = []                      # Peer list
@@ -148,8 +148,11 @@ class MemberList(object):
 
     def is_connected(self):
         if len(self.backlinks) > 0 or self.forwardlink[1] != None:
+            if Butt04['state'] == 'disabled':
+                Butt04['state'] = 'normal'
             return True
         else:
+            Butt04['state'] = 'disabled'
             return False
 
     def print_state(self):
@@ -160,22 +163,7 @@ class MemberList(object):
 
     def print_msg(self, username, msg, recv_msgid):
         """ Compare msgid and print on the screen """
-        #  DEBUG: Printing
-        #  print("[print_msg] Receive message in forward link")
-
-        #  print("[print_msg] Received msgid: {}\tCurrent msgid: {}".format(
-        #  recv_msgid, self.msgid
-        #  ))
-
-        if recv_msgid > int(self.msgid):
-            #  DEBUG: Printing
-            #  print("[print_msg] msgid: ({} > {}),"
-                #  " print and update msgid...".format(recv_msgid, self.msgid))
-
-            insert_msg(username, msg)
-            self.msgid = recv_msgid
-
-            print("[print_msg] New msgid =", self.msgid)
+        insert_msg(username, msg)
 
     def get_backlinkhash(self):
         """ Generate the backlink hashval """
@@ -187,7 +175,7 @@ class MemberList(object):
     def send_msg(self, msg):
         self.msgid += 1
 
-        print("[debug] Current msgid =", self.msgid)
+        print("[send_msg] Current msgid =", self.msgid)
         msg_cmd = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
             roomname, _MYHASH_, username, self.msgid,
             len(msg), msg.encode("base64", "strict")
@@ -202,6 +190,7 @@ class MemberList(object):
         if self.forwardlink[1] != None:
                 self.forwardlink[0].send(msg_cmd)
 
+    #  TOFIX: Buggy Backward link forwarding
     def rely_msg(self, sockfd, msg):
         print("[rely_msg] Rely message to peers...")
 
@@ -219,15 +208,23 @@ class MemberList(object):
 
         #  DEBUG: Print the message
         print("[recv_msg]", msg)
+        print("[recv_msg]", "Recv id", msg[3], "\tCurrent id:", self.msgid)
+        if self.msgid >= int(msg[3]):
+            print("[recv_msg] I have the newer msg, abort printing")
+            return
+        else:
+            #  elif self.msgid < int(msg[3]):
+            self.msgid = int(msg[3])
+            print("[print_msg] Update to new msgid:", self.msgid)
 
         if msg[0] != roomname:
-            insert_cmd("[Error] Receive different chatrooms message!")
+            insert_cmd("[recv_msg] Receive different chatrooms message!")
             return
 
         #  Print it!
         self.print_msg(msg[2], msg[5], int(msg[3]))
 
-        #  Prepare to rely message, first generate the hasval of backlinks
+        #  Prepare to rely message, first generate the hashval of backlinks
         backlink_hash = self.get_backlinkhash()
 
         #  Check it source and rely to peers,
@@ -407,12 +404,13 @@ def listen_forwardlink(sockfd):
     print("[{}] Start...".format(thd_name))
 
     #  Set timeout for the socket
-    sockfd.settimeout(0.1)
+    #  sockfd.settimeout(0.1)
 
     while _run_fdlistener_:
         try:
             msg = sockfd.recv(1024)
-        except socket.timeout:
+        #  except socket.timeout:
+        except socket.error:
             continue
 
         if msg:
@@ -477,17 +475,16 @@ def build_forwardlink():
 
     #  Receive success message from peer
     if response[:2] == "S:":
-        _rcev_msgid = response[2:].rstrip(":\r\n")
+        recv_msgid = response[2:].rstrip(":\r\n")
 
         insert_cmd("[Conc] Successful! A Forward link to user \"" +
                    peer_info[0] + '\"')
-        print("[P2P] Recve msgid: {}\tCurrent msgid: {}".format(
-            _rcev_msgid, member_list.msgid
-        ))
+        print("[build_forwardlink]",
+              "Recv id", recv_msgid, "\tCurrent id:", member_list.msgid)
 
         #  Update to the newest msgid
-        if _rcev_msgid > member_list.msgid:
-            member_list.msgid = int(_rcev_msgid)
+        if recv_msgid > member_list.msgid:
+            member_list.msgid = int(recv_msgid)
 
         #  Update forwadlink
         mlock.acquire()
@@ -620,7 +617,7 @@ def listen_to_port():
                                   ))
 
                             #  Update to newest msgid
-                            if int(userinfo[4]) > member_list.msgid:
+                            if int(userinfo[4]) > int(member_list.msgid):
                                 print("[debug] Update msgid to", userinfo[4])
                                 member_list.msgid = int(userinfo[4])
 
@@ -783,7 +780,6 @@ def do_Join():
         #  Set buttons state
         Butt01['state'] = 'disabled'
         Butt03['state'] = 'disabled'
-        Butt04['state'] = 'normal'
     elif received[:2] == "F:":
         error_msg = ("[Join] Error: {:s}").format(
             received[2:].rstrip(":\r\n"))
