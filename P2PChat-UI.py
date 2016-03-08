@@ -177,9 +177,7 @@ class MemberList(object):
 
         print("[send_msg] Current msgid =", self.msgid)
         msg_cmd = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
-            roomname, _MYHASH_, username, self.msgid,
-            len(msg), msg.encode("base64", "strict")
-        )
+            roomname, _MYHASH_, username, self.msgid, len(msg), msg)
 
         print(msg_cmd)
 
@@ -203,25 +201,26 @@ class MemberList(object):
         #  Split into list [roomname, hash, username, msgid, length, content]
         #  and decode the message
         orig_msg = msg
-        msg = msg[2:].rstrip(":\r\n").split(':')
-        msg[5] = msg[5].decode("base64", "strict")
+        msg = msg[2: len(msg) - 4].split(':', 5)
 
         #  DEBUG: Print the message
         print("[recv_msg]", msg)
         print("[recv_msg]", "Recv id", msg[3], "\tCurrent id:", self.msgid)
-        #  if self.msgid >= int(msg[3]):
-            #  print("[recv_msg] I have the newer msg, abort printing")
-            #  return
-        #  else:
-            #  self.msgid = int(msg[3])
-            #  print("[print_msg] Update to new msgid:", self.msgid)
+        """
+        if self.msgid >= int(msg[3]):
+            print("[recv_msg] I have the newer msg, abort printing")
+            return
+        else:
+            self.msgid = int(msg[3])
+            print("[print_msg] Update to new msgid:", self.msgid)
+        """
 
         if int(msg[3]) != self.msgid + 1:
             print("[recv_msg] Not expcected msgid", self.msgid + 1)
             return
         else:
             self.msgid = int(msg[3])
-            print("[print_msg] Update to new msgid:", self.msgid)
+            print("[print_msg] Update msgid to", self.msgid)
 
         if msg[0] != roomname:
             insert_cmd("[recv_msg] Receive different chatrooms message!")
@@ -465,7 +464,8 @@ def build_forwardlink():
               "Recv id", recv_msgid, "\tCurrent id:", member_list.msgid)
 
         #  Update to the newest msgid
-        if recv_msgid > member_list.msgid:
+        if int(recv_msgid) > int(member_list.msgid):
+            print("[build_forwardlink] Update msgid to", member_list.msgid)
             member_list.msgid = int(recv_msgid)
 
         #  Update forwadlink
@@ -599,7 +599,8 @@ def listen_to_port():
 
                             #  Update to newest msgid
                             if int(userinfo[4]) > int(member_list.msgid):
-                                print("[debug] Update msgid to", userinfo[4])
+                                print("[listen_to_port] Update msgid to",
+                                      userinfo[4])
                                 member_list.msgid = int(userinfo[4])
 
                             #  Add to backlink list for sending
