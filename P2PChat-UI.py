@@ -142,7 +142,7 @@ class MemberList(object):
 
     def peerinfo(self):
         print("[P2PInfo] Member\t:", self.data)
-        print("[P2PInfo] Backlinks\t:", self.backlinks)
+        print("[P2PInfo] Backward\t:", self.backlinks)
         print("[P2PInfo] Forward\t:", self.forwardlink)
         print("[P2PInfo] Sorted pos.: ",
               self.pos, "/", len(self.data) - 1, '\n')
@@ -161,10 +161,6 @@ class MemberList(object):
             insert_cmd("[Conc] You are connected to peer(s)")
         else:
             insert_cmd("[ERRO] Your are disconnected!")
-
-    def print_msg(self, username, msg, recv_msgid):
-        """ Compare msgid and print on the screen """
-        insert_msg(username, msg)
 
     def get_backlinkhash(self):
         """ Generate the backlink hashval """
@@ -227,7 +223,7 @@ class MemberList(object):
             return
 
         #  Print it!
-        self.print_msg(msg[2], msg[5], int(msg[3]))
+        insert_msg(msg[2], msg[5])
 
         #  Prepare to rely message, first generate the hashval of backlinks
         backlink_hash = self.get_backlinkhash()
@@ -733,7 +729,7 @@ def do_Join():
 
         #  Update the member list
         memberlist = received[2:].rstrip("::\r\n")
-        print("[debug] Join trigger...", end="")
+        print("[do_Join] Join trigger...", end="")
         member_list.update(memberlist)
 
         insert_cmd("[Join] You have successfully joined the chatroom " +
@@ -788,7 +784,7 @@ def do_Send():
         member_list.send_msg(message)
         mlock.release()
 
-        print("[debug] Send message (ID: {}): {}".format(
+        print("[do_Send] Send message (ID: {}): {}".format(
             member_list.msgid, message))
 
 
@@ -812,6 +808,11 @@ def do_Quit():
 
 
 # Add buttons functions
+def do_close():
+    if askokcancel("Quit", "Do you want to quit?"):
+        do_Quit()
+
+
 Butt01.config(command=do_User)
 Butt02.config(command=do_List)
 Butt03.config(command=do_Join)
@@ -855,6 +856,7 @@ def main(argv):
                    )
     insert_cmd(welcome_msg)
 
+    win.protocol("WM_DELETE_WINDOW", do_close)
     win.mainloop()
 
 
