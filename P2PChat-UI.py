@@ -209,8 +209,15 @@ class MemberList(object):
         #  DEBUG: Print the message
         print("[recv_msg]", msg)
         print("[recv_msg]", "Recv id", msg[3], "\tCurrent id:", self.msgid)
-        if self.msgid >= int(msg[3]):
-            print("[recv_msg] I have the newer msg, abort printing")
+        #  if self.msgid >= int(msg[3]):
+            #  print("[recv_msg] I have the newer msg, abort printing")
+            #  return
+        #  else:
+            #  self.msgid = int(msg[3])
+            #  print("[print_msg] Update to new msgid:", self.msgid)
+
+        if int(msg[3]) != self.msgid + 1:
+            print("[recv_msg] Not expcected msgid", self.msgid + 1)
             return
         else:
             self.msgid = int(msg[3])
