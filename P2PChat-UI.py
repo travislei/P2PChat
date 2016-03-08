@@ -5,7 +5,7 @@ Student name and No. : LEI WAN HONG, 3035202750
 Student name and No. : HO KA KUEN, 3035074878
 Development platform : Mac OS X 10.11.3
 Python version       : Python 2.7.10
-Version              : 0.8d
+Version              : 0.9d
 """
 
 from __future__ import print_function
@@ -144,7 +144,8 @@ class MemberList(object):
         print("[P2PInfo] Member\t:", self.data)
         print("[P2PInfo] Backlinks\t:", self.backlinks)
         print("[P2PInfo] Forward\t:", self.forwardlink)
-        print("[debug] Sorted pos.: ", self.pos, "/", len(self.data) - 1, '\n')
+        print("[P2PInfo] Sorted pos.: ",
+              self.pos, "/", len(self.data) - 1, '\n')
 
     def is_connected(self):
         if len(self.backlinks) > 0 or self.forwardlink[1] != None:
@@ -188,7 +189,6 @@ class MemberList(object):
         if self.forwardlink[1] != None:
                 self.forwardlink[0].send(msg_cmd)
 
-    #  TOFIX: Buggy Backward link forwarding
     def rely_msg(self, sockfd, msg):
         print("[rely_msg] Rely message to ", sockfd.getpeername())
 
@@ -429,8 +429,8 @@ def build_forwardlink():
     #  Get the necessary info now
     peer_info = member_list.data[pos][0].split(':')
     peer_hash = member_list.data[pos][1]
-    print("[P2P] Try pos.:", pos)
-    print("[P2P] Peerinfo:", peer_info)
+    print("[build_forwardlink] Try pos.:", pos)
+    print("[build_forwardlink] Peerinfo:", peer_info)
 
     #  Build a socket and try to connect it!
     sockfd = socket.socket()
@@ -446,7 +446,7 @@ def build_forwardlink():
         ))
         response = sockfd.recv(512)
     except socket.error as e:
-        print("[P2P]", e)
+        print("[build_forwardlink]", e)
         insert_cmd("[Conc] " + str(e) + ". Update list and" +
                    " try again...")
 
@@ -592,7 +592,7 @@ def listen_to_port():
                             _hashpeer = sdbm_hash(userinfo[1] + userinfo[2] +
                                                   userinfo[3])
 
-                            print("[debug] Recve msgid: {}\t"
+                            print("[listen_to_port] Recve msgid: {}\t"
                                   "Current msgid: {}".format(
                                       int(userinfo[4]), member_list.msgid
                                   ))
