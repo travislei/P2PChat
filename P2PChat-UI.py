@@ -130,7 +130,7 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
-    global _MYHASH_, server_socket, roomname, username, Butt04
+    global _MYHASH_, server_socket, roomname, username, Butt04, _running_
 
     def __init__(self):
         self.data = []                      # Peer list
@@ -184,8 +184,8 @@ class MemberList(object):
         print(msg_cmd)
 
         if self.backlinks != []:
-            for sock in self.backlinks:
-                sock[0].send(msg_cmd)
+            for sockfd in self.backlinks:
+                sockfd[0].send(msg_cmd)
 
         if self.forwardlink[1] != None:
                 self.forwardlink[0].send(msg_cmd)
@@ -297,8 +297,6 @@ class MemberList(object):
 
     def try_peerpos(self):
         """ Next peer position for P2P connection """
-        global _running_
-
         self.request_update()
 
         #  Only 1 user then quit
@@ -330,27 +328,6 @@ class MemberList(object):
                peer_hash == self.forwardlink[1] or
                peer_hash in backlink_hash):
 
-            #  TOFIX: Brute-foce quitting a thread? :/
-            if not _running_:
-                sys.exit(0)
-                #  break
-
-            #  TOFIX: Redundant code segment?
-            #  If after update there is only 1 user then break the loop
-            #  it is necessary since there is a case that
-            #  a forwardlink just leave after the update
-            if len(self.data) == 1:
-                return -1
-            #  if 2 users then wait for 2s and retry
-            elif len(self.data) == 2:
-                insert_cmd("[Conc] Waiting 2s for another user")
-                time.sleep(2.0)
-                #  self.request_update()
-                #  backlink_hash = self.get_backlinkhash()
-                #  peer_hash = member_list.data[peerpos][1]
-                #  continue
-                return -2
-
             peer_info = self.data[peerpos][0].split(':')
 
             #  DEBUG: Info printing
@@ -363,7 +340,7 @@ class MemberList(object):
             print("[try_peerpos] backlink_hash:", backlink_hash, '\n')
 
             #  Need to update and retry
-            #  self.request_update()
+            self.request_update()
 
             peerpos = (peerpos + 1) % len(self.data)
             backlink_hash = self.get_backlinkhash()
@@ -406,13 +383,12 @@ def listen_forwardlink(sockfd):
     print("[{}] Start...".format(thd_name))
 
     #  Set timeout for the socket
-    #  sockfd.settimeout(0.1)
+    sockfd.settimeout(0.1)
 
     while _run_fdlistener_:
         try:
             msg = sockfd.recv(1024)
-        #  except socket.timeout:
-        except socket.error:
+        except socket.timeout:
             continue
 
         if msg:
@@ -441,8 +417,7 @@ def build_forwardlink():
         return
     elif pos == -2:
         insert_cmd("[ERRO] All users have connected to me," +
-                   " wait 2s for another user")
-        time.sleep(2.0)
+                   " wait for another user")
         return
 
     #  Get the necessary info now
@@ -453,7 +428,6 @@ def build_forwardlink():
 
     #  Build a socket and try to connect it!
     sockfd = socket.socket()
-    sockfd.settimeout(1.0)
 
     try:
         insert_cmd("[Conc] Connecting \"{}\" with address {}:{}".format(
@@ -465,14 +439,13 @@ def build_forwardlink():
             roomname, username, userip, listen_port, member_list.msgid
         ))
         response = sockfd.recv(512)
-    except socket.timeout as e:
+    except socket.error as e:
         print("[P2P]", e)
         insert_cmd("[Conc] " + str(e) + ". Update list and" +
                    " try again...")
 
         #  Timeout, connection lost?
         member_list.request_update()
-        sockfd.close()
         return
 
     #  Receive success message from peer
@@ -504,7 +477,6 @@ def build_forwardlink():
         return
     else:
         insert_cmd("[Conc] Failed! Try next...")
-        sockfd.close()
         return
 
 
@@ -521,7 +493,7 @@ def connect_to_forwardlink():
     #  DEBUG: Allow other peers to connect to me first
     time.sleep(5.0)
 
-    while _running_:
+    while True:
         for i in range(5):
             time.sleep(0.5)
 
