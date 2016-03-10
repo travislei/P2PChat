@@ -184,7 +184,7 @@ class MemberList(object):
                 sockfd[0].send(msg_cmd)
 
         if self.forwardlink[1] != None:
-            print("[send_msg] Send to forwardlink", self.backlinks[1])
+            print("[send_msg] Send to forwardlink", self.forwardlink[1])
             self.forwardlink[0].send(msg_cmd)
 
     def rely_msg(self, sockfd, msg):
