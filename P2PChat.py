@@ -556,7 +556,7 @@ def listen_to_port():
     readsock_list.append(listen_socket)
 
     while True:
-        inready, outready, excready = select.select(readsock_list, [], [], 0.5)
+        inready, outready, excready = select.select(readsock_list, [], [], 0.1)
 
         if _running_ is False:
             print("[{}] is dying... x(".format(thd_name))
@@ -767,7 +767,7 @@ def do_Join():
 
 
 def do_Send():
-    global member_list
+    global mlock, member_list
 
     message = userentry.get()
     member_list.peerinfo()
