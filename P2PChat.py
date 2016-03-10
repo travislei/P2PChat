@@ -856,7 +856,7 @@ def main(argv):
                    )
     insert_cmd(welcome_msg)
 
-    win.protocol("WM_DELETE_WINDOW", do_close)
+    #  win.protocol("WM_DELETE_WINDOW", do_close)
     win.mainloop()
 
 
