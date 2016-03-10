@@ -180,10 +180,12 @@ class MemberList(object):
 
         if self.backlinks != []:
             for sockfd in self.backlinks:
+                print("[send_msg] Send to backlink:", sockfd[1])
                 sockfd[0].send(msg_cmd)
 
         if self.forwardlink[1] != None:
-                self.forwardlink[0].send(msg_cmd)
+            print("[send_msg] Send to forwardlink", self.backlinks[1])
+            self.forwardlink[0].send(msg_cmd)
 
     def rely_msg(self, sockfd, msg):
         print("[rely_msg] Rely message to ", sockfd.getpeername())
@@ -226,7 +228,7 @@ class MemberList(object):
         insert_msg(msg[2], msg[5])
 
         #  Prepare to rely message, first generate the hashval of backlinks
-        backlink_hash = self.get_backlinkhash()
+        #  backlink_hash = [str(x[1]) for x in self.backlinks]
 
         #  Check it source and rely to peers,
         #  if from forward link, rely to all backlinks, if any
@@ -236,7 +238,7 @@ class MemberList(object):
                     self.rely_msg(s[0], orig_msg)
 
         #  if from one of the backward link
-        elif int(msg[1]) in backlink_hash:
+        else:
             print("[recv_msg] From backward link")
 
             #  Rely to forward link, if any
