@@ -129,19 +129,21 @@ def sdbm_hash(instr):
     return hash & 0xffffffffffffffff
 
 
-class MemberList(object):
+class PeerList(object):
     global _MYHASH_, server_socket, roomname, username, Butt04
 
     def __init__(self):
-        self.data = []                      # Peer list
-        self.hashval = 0                    # Hashval of Peer List
+        self.data = []                      # Peer list, easier for sorting
+        self.msgid = {}                # Peer msgid, O(1) for retrieve!
+        self.hashval = 0                    # Hashval of _Peer List_
         self.backlinks = []                 # Backward link list
         self.forwardlink = [None, None]     # Forward link [sockfd, hashval]
-        self.msgid = 0                      # Current message id
+        self.my_msgid = 0                   # Current message id
         self.pos = -1                       # Search peer position
 
-    def peerinfo(self):
-        print("[P2PInfo] Member\t:", self.data)
+    def print_peerinfo(self):
+        print("[P2PInfo] Peer\t:", self.data)
+        print("[P2PInfo] Peer msgid\t:", self.msgid)
         print("[P2PInfo] Backward\t:", self.backlinks)
         print("[P2PInfo] Forward\t:", self.forwardlink)
         print("[P2PInfo] Sorted pos.: ",
@@ -170,11 +172,11 @@ class MemberList(object):
             return [x[1] for x in self.backlinks]
 
     def send_msg(self, msg):
-        self.msgid += 1
+        self.my_msgid += 1
 
-        print("[send_msg] Current msgid =", self.msgid)
+        print("[send_msg] Current msgid =", self.my_msgid)
         msg_cmd = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
-            roomname, _MYHASH_, username, self.msgid, len(msg), msg)
+            roomname, _MYHASH_, username, self.my_msgid, len(msg), msg)
 
         print(msg_cmd)
 
@@ -200,35 +202,26 @@ class MemberList(object):
         #  and decode the message
         orig_msg = msg
         msg = msg[2: len(msg) - 4].split(':', 5)
+        msg[1] = str(msg[1])
 
         #  DEBUG: Print the message
         print("[recv_msg]", msg)
-        print("[recv_msg]", "Recv id", msg[3], "\tCurrent id:", self.msgid)
-        """
-        if self.msgid >= int(msg[3]):
-            print("[recv_msg] I have the newer msg, abort printing")
-            return
-        else:
-            self.msgid = int(msg[3])
-            print("[print_msg] Update to new msgid:", self.msgid)
-        """
-
-        if int(msg[3]) != self.msgid + 1:
-            print("[recv_msg] Not expcected msgid", self.msgid + 1)
-            return
-        else:
-            self.msgid = int(msg[3])
-            print("[recv_msg] Update msgid to", self.msgid)
+        print("[recv_msg]", "Recv id", msg[3],
+              "\tCurrent peer id:", self.msgid[msg[1]])
 
         if msg[0] != roomname:
             insert_cmd("[recv_msg] Receive different chatrooms message!")
             return
 
+        if int(msg[3]) != self.msgid[msg[1]] + 1:
+            print("[recv_msg] Not expcected msgid", self.msgid[msg[1]]+ 1)
+            return
+        else:
+            self.msgid[msg[1]] += 1
+            print("[recv_msg] Update msgid to", self.msgid[msg[1]])
+
         #  Print it!
         insert_msg(msg[2], msg[5])
-
-        #  Prepare to rely message, first generate the hashval of backlinks
-        #  backlink_hash = [str(x[1]) for x in self.backlinks]
 
         #  Check it source and rely to peers,
         #  if from forward link, rely to all backlinks, if any
@@ -273,16 +266,30 @@ class MemberList(object):
             _splited = self.split(list)
             self.data[:] = []
 
+            #  As it name, lazy update
+            new_msgidict = {}
+
             #  Remove ":" and find its hash value
             for i in _splited:
-                _ = i.replace(':', '')
-                self.data.append((i, sdbm_hash(_)))
+                hashval = sdbm_hash(i.replace(':', ''))
+                self.data.append((i, hashval))
+
+                if hashval != _MYHASH_:
+                    #  Convert type to string for dict, legit!
+                    hashval = str(hashval)
+
+                    if self.msgid.has_key(hashval):
+                        new_msgidict[hashval] = self.msgid[hashval]
+                    else:
+                        new_msgidict[hashval] = 0
+
+            self.msgid = new_msgidict
 
             #  Sort and get my position
             self.data = sorted(self.data, key=lambda x: x[1])
             self.pos = [x[1] for x in self.data].index(_MYHASH_)
 
-            self.peerinfo()
+            self.print_peerinfo()
 
     def request_update(self):
         """ It differs from above as it sends a keepalive message """
@@ -309,7 +316,7 @@ class MemberList(object):
 
         #  Let the position be peerpos and get its hashval
         peerpos = (self.pos + 1) % len(self.data)
-        peer_hash = member_list.data[peerpos][1]
+        peer_hash = peerlist.data[peerpos][1]
 
         #  Generate backlink hashval
         backlink_hash = self.get_backlinkhash()
@@ -348,26 +355,24 @@ class MemberList(object):
 
             peerpos = (peerpos + 1) % len(self.data)
             backlink_hash = self.get_backlinkhash()
-            peer_hash = member_list.data[peerpos][1]
+            peer_hash = peerlist.data[peerpos][1]
 
         return peerpos
 
 
-#  Create a memberlist
-member_list = MemberList()
+#  Create a peerlist
+peerlist = PeerList()
 
 
 def send_keepalive():
     """ Thread to send keepalive message and update memberlist """
-    global mlock, _running_, _KEEPALIVE_, member_list
+    global mlock, _running_, _KEEPALIVE_, peerlist
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
     print("[{}] Start...".format(thd_name))
 
     while True:
-        #  DEBUG: hardcore sleep time
-        #  for i in range(_SLEEPTIME_):
         for i in range(40):
             time.sleep(0.5)
 
@@ -375,12 +380,12 @@ def send_keepalive():
                 print("[{}] is dying... x(".format(thd_name))
                 return
 
-        member_list.request_update()
+        peerlist.request_update()
 
 
 def listen_forwardlink(sockfd):
     """ Thread to receive message from the connected forward link """
-    global mlock, member_list, _run_fdlistener_
+    global mlock, peerlist, _run_fdlistener_
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
@@ -397,15 +402,15 @@ def listen_forwardlink(sockfd):
 
         if msg:
             print("[{}] Recive message: {}".format(thd_name, msg))
-            member_list.recv_msg(msg)
+            peerlist.recv_msg(msg)
         elif not msg:
             insert_cmd("[Conc] Forward link is broken, build again...")
 
             #  TODO: Remove peer msgid
 
             mlock.acquire()
-            member_list.forwardlink[0] = None
-            member_list.forwardlink[1] = None
+            peerlist.forwardlink[0] = None
+            peerlist.forwardlink[1] = None
             mlock.release()
 
             build_forwardlink()
@@ -418,11 +423,11 @@ def listen_forwardlink(sockfd):
 
 def build_forwardlink():
     """ Function to establish a forward link """
-    global mlock, _MYHASH_, member_list, thread_listenforward, _run_fdlistener_
-    global roomname, username, userip, listen_port, _running_
+    global mlock, _MYHASH_, peerlist, thread_listenforward, _run_fdlistener_
+    global roomname, username, userip, listen_port
 
     #  Get the peer position
-    pos = member_list.try_peerpos()
+    pos = peerlist.try_peerpos()
 
     #  Check if there exists any user
     if pos == -1:
@@ -434,8 +439,8 @@ def build_forwardlink():
         return
 
     #  Get the necessary info now
-    peer_info = member_list.data[pos][0].split(':')
-    peer_hash = member_list.data[pos][1]
+    peer_info = peerlist.data[pos][0].split(':')
+    peer_hash = peerlist.data[pos][1]
     print("[build_forwardlink] Try pos.:", pos)
     print("[build_forwardlink] Peerinfo:", peer_info)
 
@@ -449,7 +454,7 @@ def build_forwardlink():
 
         sockfd.connect((peer_info[1], int(peer_info[2])))
         sockfd.send("P:{}:{}:{}:{}:{}::\r\n".format(
-            roomname, username, userip, listen_port, member_list.msgid
+            roomname, username, userip, listen_port, peerlist.my_msgid
         ))
         response = sockfd.recv(500)
     except socket.error as e:
@@ -457,28 +462,31 @@ def build_forwardlink():
         insert_cmd("[Conc] " + str(e) + ". Update list and" +
                    " try again...")
 
-        #  Timeout, connection lost?
-        member_list.request_update()
+        #  Try again?
+        peerlist.request_update()
         return
 
     #  Receive success message from peer
     if response[:2] == "S:":
         recv_msgid = response[2:].rstrip(":\r\n")
+        peer_hash = str(peer_hash)
 
         insert_cmd("[Conc] Successful! A Forward link to user \"" +
                    peer_info[0] + '\"')
         print("[build_forwardlink]",
-              "Recv id", recv_msgid, "\tCurrent id:", member_list.msgid)
+              "Recv id", recv_msgid,
+              "\tCurrent peer id:", peerlist.msgid[peer_hash])
 
-        #  Update to the newest msgid
-        if int(recv_msgid) > int(member_list.msgid):
-            print("[build_forwardlink] Update msgid to", member_list.msgid)
-            member_list.msgid = int(recv_msgid)
+        #  Update peer msgid
+        if int(recv_msgid) > peerlist.msgid[peer_hash]:
+            peerlist.msgid[peer_hash] = int(recv_msgid)
+            print("[build_forwardlink] Update peer msgid to",
+                  peerlist.msgid[peer_hash])
 
         #  Update forwadlink
         mlock.acquire()
-        member_list.forwardlink[0] = sockfd
-        member_list.forwardlink[1] = peer_hash
+        peerlist.forwardlink[0] = sockfd
+        peerlist.forwardlink[1] = peer_hash
         mlock.release()
 
         #  Create thread to listen forwardlink message
@@ -496,7 +504,7 @@ def build_forwardlink():
 
 def connect_to_forwardlink():
     """ Thread to check if forwardlink has been established or not """
-    global mlock, _running_, member_list, thread_listenforward, _run_fdlistener_
+    global mlock, _running_, peerlist, thread_listenforward, _run_fdlistener_
 
     #  Get the thread name
     thd_name = "Thd." + threading.current_thread().getName()
@@ -516,17 +524,18 @@ def connect_to_forwardlink():
                 return
 
         #  Check forwardlink connection, if no then build one!
-        if member_list.forwardlink[0] == None:
+        if peerlist.forwardlink[0] == None:
             insert_cmd("[Conc] No forward link is found, try again...")
 
             build_forwardlink()
 
-            member_list.print_state()
+            #  Print the current state on cmd
+            peerlist.print_state()
 
 
 def listen_to_port():
     """ Thread to listen connection(s) using select """
-    global mlock, member_list, listen_socket, _running_
+    global mlock, peerlist, listen_socket, _running_
 
     #  Get thread name
     thd_name = "Thd." + threading.current_thread().getName()
@@ -562,31 +571,33 @@ def listen_to_port():
                         #  At this stage only if the connection has been
                         #  established will the program enter following code
                         if data[:2] == "P:":
-                            member_list.request_update()
+                            peerlist.request_update()
 
-                            s.send("S:{}::\r\n".format(member_list.msgid))
+                            s.send("S:{}::\r\n".format(peerlist.my_msgid))
 
                             userinfo = data[2:].rstrip(":\r\n").split(':')
                             print("[{}] Received request message {}".format(
                                 thd_name, userinfo))
 
-                            _hashpeer = sdbm_hash(userinfo[1] + userinfo[2] +
+                            peer_hash = sdbm_hash(userinfo[1] + userinfo[2] +
                                                   userinfo[3])
 
                             print("[listen_to_port] Recve msgid: {}\t"
-                                  "Current msgid: {}".format(
-                                      int(userinfo[4]), member_list.msgid
+                                  "Current peer msgid: {}".format(
+                                      int(userinfo[4]),
+                                      peerlist.msgid[str(peer_hash)]
                                   ))
 
-                            #  Update to newest msgid
-                            if int(userinfo[4]) > int(member_list.msgid):
-                                print("[listen_to_port] Update msgid to",
-                                      userinfo[4])
-                                member_list.msgid = int(userinfo[4])
+                            #  Update peer msgid
+                            hashval = str(peer_hash)
+                            if int(userinfo[4]) > peerlist.msgid[hashval]:
+                                peerlist.msgid[hashval] = int(userinfo[4])
+                                print("[listen_to_port] Update peer msgid to",
+                                      peerlist.msgid[hashval])
 
                             #  Add to backlink list for sending
                             mlock.acquire()
-                            member_list.backlinks.append([s, _hashpeer])
+                            peerlist.backlinks.append([s, peer_hash])
                             mlock.release()
 
                             #  Inform user
@@ -595,31 +606,31 @@ def listen_to_port():
                                        ") has connected to me")
 
                             #  Print the state now
-                            member_list.print_state()
+                            peerlist.print_state()
                         else:
                             print("[{}] Receive a message: {}".format(
                                 thd_name, data
                             ))
 
-                            member_list.recv_msg(data)
+                            peerlist.recv_msg(data)
                     else:
                         print("[{}] Broken connection from {}"
                               " removing...".format(thd_name, s.getpeername()))
 
                         mlock.acquire()
-                        for i in member_list.backlinks:
+                        for i in peerlist.backlinks:
                             if i[0] == s:
                                 insert_cmd("[Conc] Disconnect to " +
                                            str(s.getpeername()))
-                                member_list.backlinks.remove(i)
+                                peerlist.backlinks.remove(i)
                         mlock.release()
 
                         readsock_list.remove(s)
                         s.close()
 
                         #  Print the state now
-                        member_list.request_update()
-                        member_list.print_state()
+                        peerlist.request_update()
+                        peerlist.print_state()
 
 
 #
@@ -711,12 +722,12 @@ def do_Join():
         #  Update the member list
         memberlist = received[2:].rstrip("::\r\n")
         print("[do_Join] Join trigger...", end="")
-        member_list.update(memberlist)
+        peerlist.update(memberlist)
 
         insert_cmd("[Join] You have successfully joined the chatroom " +
                    roomname + " as \"" + username + "\"!\n" +
                    "       User(s) online: " +
-                   str(len(member_list.data)))
+                   str(len(peerlist.data)))
 
         #  Start a thread to send keepalive
         keepalive_thread = threading.Thread(name="Keepalive",
@@ -746,10 +757,10 @@ def do_Join():
 
 
 def do_Send():
-    global mlock, member_list
+    global mlock, peerlist
 
     message = userentry.get()
-    member_list.peerinfo()
+    peerlist.print_peerinfo()
 
     if message is "":
         showwarning("Please enter the message",
@@ -760,13 +771,13 @@ def do_Send():
     userentry.delete(0, END)
 
     #  Check if there is any link to send
-    if member_list.is_connected():
+    if peerlist.is_connected():
         mlock.acquire()
-        member_list.send_msg(message)
+        peerlist.send_msg(message)
         mlock.release()
 
         print("[do_Send] Send message (ID: {}): {}".format(
-            member_list.msgid, message))
+            peerlist.my_msgid, message))
 
 
 def do_Quit():
