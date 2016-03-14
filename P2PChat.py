@@ -35,7 +35,7 @@ username = None
 roomname = ""
 
 #  Memberlist mutex lock
-mlock = threading.Lock()    # Mutex lock for Memberlist obj
+mlock = threading.Lock()    # Mutex lock for Memberlist object
 thread_list = []
 thread_listenforward = None
 
@@ -130,7 +130,7 @@ def sdbm_hash(instr):
 
 
 class MemberList(object):
-    global _MYHASH_, server_socket, roomname, username, Butt04, _running_
+    global _MYHASH_, server_socket, roomname, username, Butt04
 
     def __init__(self):
         self.data = []                      # Peer list
@@ -181,17 +181,17 @@ class MemberList(object):
         if self.backlinks != []:
             for sockfd in self.backlinks:
                 print("[send_msg] Send to backlink:", sockfd[1])
-                sockfd[0].send(msg_cmd)
+                sockfd[0].sendall(msg_cmd)
 
         if self.forwardlink[1] != None:
             print("[send_msg] Send to forwardlink", self.forwardlink[1])
-            self.forwardlink[0].send(msg_cmd)
+            self.forwardlink[0].sendall(msg_cmd)
 
     def rely_msg(self, sockfd, msg):
         print("[rely_msg] Rely message to ", sockfd.getpeername())
 
         try:
-            sockfd.send(msg)
+            sockfd.sendall(msg)
         except socket.error as e:
             print("[rely_msg]", e)
 
@@ -218,7 +218,7 @@ class MemberList(object):
             return
         else:
             self.msgid = int(msg[3])
-            print("[print_msg] Update msgid to", self.msgid)
+            print("[recv_msg] Update msgid to", self.msgid)
 
         if msg[0] != roomname:
             insert_cmd("[recv_msg] Receive different chatrooms message!")
@@ -289,7 +289,7 @@ class MemberList(object):
         print("[debug] Send a keepalive message...", end='')
 
         server_socket.send(_KEEPALIVE_)
-        received = server_socket.recv(1024)
+        received = server_socket.recv(500)
 
         if received[:2] == "M:":
             _list = received[2:].rstrip("::\r\n")
@@ -387,20 +387,29 @@ def listen_forwardlink(sockfd):
     print("[{}] Start...".format(thd_name))
 
     #  Set timeout for the socket
-    sockfd.settimeout(0.1)
+    sockfd.settimeout(1)
 
     while _run_fdlistener_:
         try:
-            msg = sockfd.recv(1024)
+            msg = sockfd.recv(500)
         except socket.timeout:
             continue
 
         if msg:
             print("[{}] Recive message: {}".format(thd_name, msg))
+            member_list.recv_msg(msg)
+        elif not msg:
+            insert_cmd("[Conc] Forward link is broken, build again...")
+
+            #  TODO: Remove peer msgid
 
             mlock.acquire()
-            member_list.recv_msg(msg)
+            member_list.forwardlink[0] = None
+            member_list.forwardlink[1] = None
             mlock.release()
+
+            build_forwardlink()
+            break
 
     sockfd.close()
     print("[{}] is dying... x(".format(thd_name))
@@ -442,7 +451,7 @@ def build_forwardlink():
         sockfd.send("P:{}:{}:{}:{}:{}::\r\n".format(
             roomname, username, userip, listen_port, member_list.msgid
         ))
-        response = sockfd.recv(512)
+        response = sockfd.recv(500)
     except socket.error as e:
         print("[build_forwardlink]", e)
         insert_cmd("[Conc] " + str(e) + ". Update list and" +
@@ -513,32 +522,6 @@ def connect_to_forwardlink():
             build_forwardlink()
 
             member_list.print_state()
-        #  Test if it is still connected
-        else:
-            #  Set timeout so that we will not wait forever
-            member_list.forwardlink[0].settimeout(1.0)
-
-            try:
-                data = member_list.forwardlink[0].recv(512)
-            except socket.timeout:
-                continue
-
-            #  Oh need to find new one!
-            if not data:
-                insert_cmd("[Conc] Forward link is broken, build again...")
-
-                _run_fdlistener_ = False
-                thread_listenforward.join()
-
-                mlock.acquire()
-                member_list.forwardlink[0] = None
-                member_list.forwardlink[1] = None
-                mlock.release()
-
-                build_forwardlink()
-
-                #  Print connection state to the user
-                member_list.print_state()
 
 
 def listen_to_port():
@@ -556,7 +539,7 @@ def listen_to_port():
     readsock_list.append(listen_socket)
 
     while True:
-        inready, outready, excready = select.select(readsock_list, [], [], 0.1)
+        inready, outready, excready = select.select(readsock_list, [], [], 1.0)
 
         if _running_ is False:
             print("[{}] is dying... x(".format(thd_name))
@@ -573,7 +556,7 @@ def listen_to_port():
 
                     readsock_list.append(peer)
                 else:
-                    data = s.recv(1024)
+                    data = s.recv(500)
 
                     if data:
                         #  At this stage only if the connection has been
@@ -618,9 +601,7 @@ def listen_to_port():
                                 thd_name, data
                             ))
 
-                            mlock.acquire()
                             member_list.recv_msg(data)
-                            mlock.release()
                     else:
                         print("[{}] Broken connection from {}"
                               " removing...".format(thd_name, s.getpeername()))
@@ -670,10 +651,8 @@ def do_User():
 def do_List():
     global mlock
 
-    mlock.acquire()
     server_socket.send("L::\r\n")
-    received = server_socket.recv(1024)
-    mlock.release()
+    received = server_socket.recv(500)
 
     if received == "G::\r\n":
         insert_cmd("[List] No active chatroom!")
@@ -723,7 +702,7 @@ def do_Join():
     _KEEPALIVE_ = ("J:{:s}:{:s}:{:s}:{:d}::\r\n").format(roomname, username,
                                                          userip, listen_port)
     server_socket.send(_KEEPALIVE_)
-    received = server_socket.recv(1024)
+    received = server_socket.recv(500)
 
     if received[:2] == "M:":
         #  Only delete user input if it has been successfully connected
@@ -845,7 +824,7 @@ def main(argv):
         print("Socket bind error: ", e)
         sys.exit(1)
 
-    listen_socket.listen(5)
+    listen_socket.listen(10)
 
     #  Print welcome message
     welcome_msg = ("{:s}***** Welcome to P2P Chatroom *****\n"
