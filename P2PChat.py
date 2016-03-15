@@ -172,13 +172,16 @@ class PeerList(object):
             return [x[1] for x in self.backlinks]
 
     def send_msg(self, msg):
+        #  DEBUG
+        self.print_state()
+
         self.my_msgid += 1
 
         print("[send_msg] Current msgid =", self.my_msgid)
         msg_cmd = "T:{}:{}:{}:{}:{}:{}::\r\n".format(
             roomname, _MYHASH_, username, self.my_msgid, len(msg), msg)
 
-        print(msg_cmd)
+        print("[send_msg]", msg_cmd)
 
         if self.backlinks != []:
             for sockfd in self.backlinks:
@@ -204,6 +207,9 @@ class PeerList(object):
         msg = msg[2: len(msg) - 4].split(':', 5)
         msg[1] = str(msg[1])
 
+        if msg[1] not in self.msgid:
+            self.msgid[msg[1]] = -1
+
         #  DEBUG: Print the message
         print("[recv_msg]", msg)
         print("[recv_msg]", "Recv id", msg[3],
@@ -213,10 +219,14 @@ class PeerList(object):
             insert_cmd("[recv_msg] Receive different chatrooms message!")
             return
 
-        if int(msg[3]) != self.msgid[msg[1]] + 1:
-            print("[recv_msg] Not expcected msgid", self.msgid[msg[1]]+ 1)
+        if self.msgid[msg[1]] == -1:
+            print("[recv_msg] Never receive any msg from this peer,"
+                  " update peer's msgid")
+            self.msgid[msg[1]] = int(msg[3])
+        elif int(msg[3]) != self.msgid[msg[1]] + 1:
+            print("[recv_msg] Not expcected msgid", self.msgid[msg[1]] + 1)
             return
-        else:
+        elif int(msg[3]) == self.msgid[msg[1]] + 1:
             self.msgid[msg[1]] += 1
             print("[recv_msg] Update msgid to", self.msgid[msg[1]])
 
@@ -278,10 +288,10 @@ class PeerList(object):
                     #  Convert type to string for dict, legit!
                     hashval = str(hashval)
 
-                    if self.msgid.has_key(hashval):
+                    if hashval in self.msgid:
                         new_msgidict[hashval] = self.msgid[hashval]
                     else:
-                        new_msgidict[hashval] = 0
+                        new_msgidict[hashval] = -1
 
             self.msgid = new_msgidict
 
@@ -383,7 +393,7 @@ def send_keepalive():
         peerlist.request_update()
 
 
-def listen_forwardlink(sockfd):
+def listen_forwardlink(sockfd, hashval):
     """ Thread to receive message from the connected forward link """
     global mlock, peerlist, _run_fdlistener_
 
@@ -406,11 +416,12 @@ def listen_forwardlink(sockfd):
         elif not msg:
             insert_cmd("[Conc] Forward link is broken, build again...")
 
-            #  TODO: Remove peer msgid
-
+            #  Remove socket from forwardlink and msgid
             mlock.acquire()
             peerlist.forwardlink[0] = None
             peerlist.forwardlink[1] = None
+
+            del peerlist.msgid[hashval]
             mlock.release()
 
             build_forwardlink()
@@ -471,30 +482,26 @@ def build_forwardlink():
         recv_msgid = response[2:].rstrip(":\r\n")
         peer_hash = str(peer_hash)
 
-        insert_cmd("[Conc] Successful! A Forward link to user \"" +
-                   peer_info[0] + '\"')
-        print("[build_forwardlink]",
-              "Recv id", recv_msgid,
-              "\tCurrent peer id:", peerlist.msgid[peer_hash])
-
-        #  Update peer msgid
-        if int(recv_msgid) > peerlist.msgid[peer_hash]:
-            peerlist.msgid[peer_hash] = int(recv_msgid)
-            print("[build_forwardlink] Update peer msgid to",
-                  peerlist.msgid[peer_hash])
-
-        #  Update forwadlink
+        #  Update forwadlink and msgid
         mlock.acquire()
         peerlist.forwardlink[0] = sockfd
         peerlist.forwardlink[1] = peer_hash
+
+        peerlist.msgid[peer_hash] = int(recv_msgid)
         mlock.release()
 
         #  Create thread to listen forwardlink message
         _run_fdlistener_ = True
         thread_listenforward = threading.Thread(name="Forwardlistener",
                                                 target=listen_forwardlink,
-                                                args=(sockfd,))
+                                                args=(sockfd, peer_hash,))
         thread_listenforward.start()
+
+        insert_cmd("[Conc] Successful! A Forward link to user \"" +
+                   peer_info[0] + '\"')
+        print("[build_forwardlink]",
+              "Recv id", recv_msgid,
+              "\tCurrent peer msgid:", peerlist.msgid[peer_hash])
 
         return
     else:
@@ -582,28 +589,26 @@ def listen_to_port():
                             peer_hash = sdbm_hash(userinfo[1] + userinfo[2] +
                                                   userinfo[3])
 
-                            print("[listen_to_port] Recve msgid: {}\t"
-                                  "Current peer msgid: {}".format(
-                                      int(userinfo[4]),
-                                      peerlist.msgid[str(peer_hash)]
-                                  ))
-
-                            #  Update peer msgid
-                            hashval = str(peer_hash)
-                            if int(userinfo[4]) > peerlist.msgid[hashval]:
-                                peerlist.msgid[hashval] = int(userinfo[4])
-                                print("[listen_to_port] Update peer msgid to",
-                                      peerlist.msgid[hashval])
-
-                            #  Add to backlink list for sending
+                            #  Add to backlink list and update msgid
                             mlock.acquire()
                             peerlist.backlinks.append([s, peer_hash])
+
+                            hashval = str(peer_hash)
+                            peerlist.msgid[hashval] = int(userinfo[4])
+                            print("[listen_to_port] Update peer msgid to",
+                                  peerlist.msgid[hashval])
                             mlock.release()
 
                             #  Inform user
                             insert_cmd("[Conc] User \"" + userinfo[1] + '\"'
                                        " (" + userinfo[2] + ":" + userinfo[3] +
                                        ") has connected to me")
+
+                            print("[listen_to_port] Recve msgid: {}\t"
+                                  "Current peer msgid: {}".format(
+                                      int(userinfo[4]),
+                                      peerlist.msgid[str(peer_hash)]
+                                  ))
 
                             #  Print the state now
                             peerlist.print_state()
@@ -622,7 +627,10 @@ def listen_to_port():
                             if i[0] == s:
                                 insert_cmd("[Conc] Disconnect to " +
                                            str(s.getpeername()))
+
+                                #  Remove it from backlinks and msgid
                                 peerlist.backlinks.remove(i)
+                                del peerlist.msgid[str(i[1])]
                         mlock.release()
 
                         readsock_list.remove(s)
