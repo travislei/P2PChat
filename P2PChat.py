@@ -207,22 +207,17 @@ class PeerList(object):
         msg = msg[2: len(msg) - 4].split(':', 5)
         msg[1] = str(msg[1])
 
-        if msg[1] not in self.msgid:
-            self.msgid[msg[1]] = -1
-
-        #  DEBUG: Print the message
-        print("[recv_msg]", msg)
-        print("[recv_msg]", "Recv id", msg[3],
-              "\tCurrent peer id:", self.msgid[msg[1]])
-
         if msg[0] != roomname:
             insert_cmd("[recv_msg] Receive different chatrooms message!")
             return
 
-        if self.msgid[msg[1]] == -1:
+        #  Not in our msgid? Create it!
+        if msg[1] not in self.msgid:
             print("[recv_msg] Never receive any msg from this peer,"
                   " update peer's msgid")
             self.msgid[msg[1]] = int(msg[3])
+
+        #  In-order arrival
         elif int(msg[3]) != self.msgid[msg[1]] + 1:
             print("[recv_msg] Not expcected msgid", self.msgid[msg[1]] + 1)
             return
@@ -232,6 +227,10 @@ class PeerList(object):
 
         #  Print it!
         insert_msg(msg[2], msg[5])
+        #  DEBUG: Print the message
+        print("[recv_msg]", msg)
+        print("[recv_msg]", "Recv id", msg[3],
+              "\tCurrent peer id:", self.msgid[msg[1]])
 
         #  Check it source and rely to peers,
         #  if from forward link, rely to all backlinks, if any
@@ -276,24 +275,10 @@ class PeerList(object):
             _splited = self.split(list)
             self.data[:] = []
 
-            #  As it name, lazy update
-            new_msgidict = {}
-
             #  Remove ":" and find its hash value
             for i in _splited:
                 hashval = sdbm_hash(i.replace(':', ''))
                 self.data.append((i, hashval))
-
-                if hashval != _MYHASH_:
-                    #  Convert type to string for dict, legit!
-                    hashval = str(hashval)
-
-                    if hashval in self.msgid:
-                        new_msgidict[hashval] = self.msgid[hashval]
-                    else:
-                        new_msgidict[hashval] = -1
-
-            self.msgid = new_msgidict
 
             #  Sort and get my position
             self.data = sorted(self.data, key=lambda x: x[1])
@@ -390,6 +375,7 @@ def send_keepalive():
                 print("[{}] is dying... x(".format(thd_name))
                 return
 
+        insert_cmd("[Conc] Send a keepalive message")
         peerlist.request_update()
 
 
@@ -421,7 +407,8 @@ def listen_forwardlink(sockfd, hashval):
             peerlist.forwardlink[0] = None
             peerlist.forwardlink[1] = None
 
-            del peerlist.msgid[hashval]
+            if hashval in peerlist.msgid:
+                del peerlist.msgid[hashval]
             mlock.release()
 
             build_forwardlink()
@@ -630,7 +617,8 @@ def listen_to_port():
 
                                 #  Remove it from backlinks and msgid
                                 peerlist.backlinks.remove(i)
-                                del peerlist.msgid[str(i[1])]
+                                if str(i[1]) in peerlist.msgid:
+                                    del peerlist.msgid[str(i[1])]
                         mlock.release()
 
                         readsock_list.remove(s)
@@ -645,7 +633,7 @@ def listen_to_port():
 #  Functions to handle user input
 #
 def do_User():
-    global username
+    global username, roomname
 
     _un = userentry.get()
 
@@ -655,6 +643,10 @@ def do_User():
 
     if ":" in _un:
         showwarning("Special character!", "Cannot contain \":\"")
+        return
+    elif roomname != "":
+        insert_cmd("[User] You are NOT allowed to change you name, " +
+                   username)
         return
 
     #  Only update usernmae if it has passed above conditions
@@ -710,21 +702,20 @@ def do_Join():
     if ":" in _rm:
         showwarning("Special character!", "Cannot contain \":\"")
         return
-
-    #  Only update roomname if it has passed the bove conditions
-    roomname = _rm
-
-    #  Username is now confirmed, generate the unique hash value
-    _MYHASH_ = sdbm_hash(username + userip + str(listen_port))
+    elif roomname != "":
+        insert_cmd("[Join] You have joined a chatroom " + roomname)
+        return
 
     #  Send message to the server
-    _KEEPALIVE_ = ("J:{:s}:{:s}:{:s}:{:d}::\r\n").format(roomname, username,
+    _KEEPALIVE_ = ("J:{:s}:{:s}:{:s}:{:d}::\r\n").format(_rm, username,
                                                          userip, listen_port)
     server_socket.send(_KEEPALIVE_)
     received = server_socket.recv(500)
 
     if received[:2] == "M:":
         #  Only delete user input if it has been successfully connected
+        roomname = _rm
+        _MYHASH_ = sdbm_hash(username + userip + str(listen_port))
         userentry.delete(0, END)
 
         #  Update the member list
@@ -754,10 +745,6 @@ def do_Join():
                                           target=connect_to_forwardlink)
         connect_thread.start()
         thread_list.append(connect_thread)
-
-        #  Set buttons state
-        Butt01['state'] = 'disabled'
-        Butt03['state'] = 'disabled'
     elif received[:2] == "F:":
         error_msg = ("[Join] Error: {:s}").format(
             received[2:].rstrip(":\r\n"))
