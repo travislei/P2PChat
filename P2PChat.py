@@ -5,7 +5,7 @@ Student name and No. : LEI WAN HONG, 3035202750
 Student name and No. : HO KA KUEN, 3035074878
 Development platform : Mac OS X 10.11.3
 Python version       : Python 2.7.10
-Version              : 1.0rc
+Version              : 1.1rc
 """
 
 from __future__ import print_function
@@ -282,7 +282,7 @@ class PeerList(object):
                 self.data.append((i, hashval))
                 peerhash_list.append(str(hashval))
 
-            #  Remove the msgid that is outdated
+            #  Remove the msgid if it is outdated
             #  i.e. not in updated member list
             for key in self.msgid.keys():
                 if str(key) not in peerhash_list:
@@ -852,7 +852,7 @@ def main(argv):
                    )
     insert_cmd(welcome_msg)
 
-    #  win.protocol("WM_DELETE_WINDOW", do_close)
+    win.protocol("WM_DELETE_WINDOW", do_close)
     win.mainloop()
 
 
