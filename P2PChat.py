@@ -5,7 +5,7 @@ Student name and No. : LEI WAN HONG, 3035202750
 Student name and No. : HO KA KUEN, 3035074878
 Development platform : Mac OS X 10.11.3
 Python version       : Python 2.7.10
-Version              : 0.9d
+Version              : 1.0rc
 """
 
 from __future__ import print_function
@@ -134,7 +134,7 @@ class PeerList(object):
 
     def __init__(self):
         self.data = []                      # Peer list, easier for sorting
-        self.msgid = {}                # Peer msgid, O(1) for retrieve!
+        self.msgid = {}                     # Peer msgid, O(1) for retrieve!
         self.hashval = 0                    # Hashval of _Peer List_
         self.backlinks = []                 # Backward link list
         self.forwardlink = [None, None]     # Forward link [sockfd, hashval]
@@ -274,11 +274,19 @@ class PeerList(object):
             #  Split and clear
             _splited = self.split(list)
             self.data[:] = []
+            peerhash_list = []
 
             #  Remove ":" and find its hash value
             for i in _splited:
                 hashval = sdbm_hash(i.replace(':', ''))
                 self.data.append((i, hashval))
+                peerhash_list.append(str(hashval))
+
+            #  Remove the msgid that is outdated
+            #  i.e. not in updated member list
+            for key in self.msgid.keys():
+                if str(key) not in peerhash_list:
+                    del self.msgid[str(key)]
 
             #  Sort and get my position
             self.data = sorted(self.data, key=lambda x: x[1])
@@ -311,7 +319,7 @@ class PeerList(object):
 
         #  Let the position be peerpos and get its hashval
         peerpos = (self.pos + 1) % len(self.data)
-        peer_hash = peerlist.data[peerpos][1]
+        peer_hash = self.data[peerpos][1]
 
         #  Generate backlink hashval
         backlink_hash = self.get_backlinkhash()
@@ -350,7 +358,7 @@ class PeerList(object):
 
             peerpos = (peerpos + 1) % len(self.data)
             backlink_hash = self.get_backlinkhash()
-            peer_hash = peerlist.data[peerpos][1]
+            peer_hash = self.data[peerpos][1]
 
         return peerpos
 
@@ -769,6 +777,7 @@ def do_Send():
     if peerlist.is_connected():
         mlock.acquire()
         peerlist.send_msg(message)
+        time.sleep(0.01)
         mlock.release()
 
         print("[do_Send] Send message (ID: {}): {}".format(
